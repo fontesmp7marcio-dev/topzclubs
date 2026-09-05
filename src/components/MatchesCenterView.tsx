@@ -422,7 +422,7 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = ({
                       const cardBgClass = isLive
                         ? 'bg-[#12241b] hover:bg-[#182c22] border-l-2 border-l-emerald-400'
                         : isFinished
-                        ? 'bg-[#141518] hover:bg-[#1a1b1f]'
+                        ? 'bg-[#141414] hover:bg-[#1a1a1a]'
                         : 'bg-[#22242b] hover:bg-[#282a33]';
 
                       const score1 = match.score?.ft ? match.score.ft[0] : null;

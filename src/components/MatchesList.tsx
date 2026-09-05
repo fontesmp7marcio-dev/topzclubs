@@ -211,7 +211,7 @@ export const MatchesList: React.FC<MatchesListProps> = ({
                   const cardBgClass = isLive
                     ? 'bg-[#12241b] hover:bg-[#182c22] border-emerald-500/40 ring-1 ring-emerald-500/20'
                     : isFinished
-                    ? 'bg-[#141518] hover:bg-[#1a1b1f] border-zinc-800'
+                    ? 'bg-[#141414] hover:bg-[#1a1a1a] border-zinc-800'
                     : 'bg-[#22242b] hover:bg-[#282a33] border-[#2e313a]';
 
                   const rank1 = getTeamRank(match.team1);
