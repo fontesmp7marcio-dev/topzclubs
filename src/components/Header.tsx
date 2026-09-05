@@ -55,8 +55,14 @@ export const Header: React.FC<HeaderProps> = ({
 
               <div>
                 <div className="flex items-center gap-2">
+                  <img
+                    src="/pwa-192x192.png"
+                    alt="TOPZCLUBS Logo"
+                    className="w-6 h-6 object-contain rounded-lg shrink-0"
+                    referrerPolicy="no-referrer"
+                  />
                   <h1 className="text-base font-bold tracking-tight text-white font-['Outfit']">
-                    FUT<span className="text-emerald-500">ANALYTICA</span>
+                    TOPZ<span className="text-[#ccff00]">CLUBS</span>
                   </h1>
                   <span className="inline-flex items-center gap-1.5 text-[9px] uppercase tracking-wider font-mono text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded border border-emerald-500/30">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>

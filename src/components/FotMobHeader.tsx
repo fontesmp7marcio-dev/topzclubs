@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, Settings, Smartphone, Apple, Menu, X, Shield, RefreshCw, BarChart3 } from 'lucide-react';
 import { LeagueOption } from '../types';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface FotMobHeaderProps {
   selectedLeague: LeagueOption | null;
@@ -54,12 +55,15 @@ export const FotMobHeader: React.FC<FotMobHeaderProps> = ({
               e.preventDefault();
               onNavTabChange('matches');
             }}
-            className="flex items-center gap-1.5 group cursor-pointer shrink-0"
+            className="flex items-center gap-2 group cursor-pointer shrink-0"
             title="TOPZCLUBS Início"
           >
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-[#ccff00] text-black flex items-center justify-center font-black text-xs tracking-tighter shadow-sm font-sans shrink-0">
-              TZ
-            </div>
+            <img
+              src="/pwa-192x192.png"
+              alt="TOPZCLUBS Logo"
+              className="w-8 h-8 sm:w-9 sm:h-9 object-contain rounded-xl shrink-0 shadow-sm"
+              referrerPolicy="no-referrer"
+            />
             <span className="hidden md:inline text-lg font-black tracking-tight text-white font-sans uppercase">
               TOPZCLUBS
             </span>
@@ -123,6 +127,9 @@ export const FotMobHeader: React.FC<FotMobHeaderProps> = ({
               );
             })}
           </nav>
+
+          {/* PWA Install Button */}
+          <PWAInstallButton />
 
           {/* Refresh Action */}
           <button
