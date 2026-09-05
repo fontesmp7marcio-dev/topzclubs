@@ -413,8 +413,18 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = ({
                   {/* Matches List */}
                   <div className="divide-y divide-[#1e1e1e]">
                     {group.matches.map((match, idx) => {
-                      const isLive = match.status === 'live';
+                      const isLive = match.status === 'live' || !!match.liveMinute;
                       const isFinished = match.status === 'finished';
+                      const isUpcoming = !isLive && !isFinished;
+
+                      // Visual card background based on match status:
+                      // Encerrado: Cinza escuro | Futuro: Cinza mais claro | Ao Vivo: Verde sutil e discreto
+                      const cardBgClass = isLive
+                        ? 'bg-[#12241b] hover:bg-[#182c22] border-l-2 border-l-emerald-400'
+                        : isFinished
+                        ? 'bg-[#141518] hover:bg-[#1a1b1f]'
+                        : 'bg-[#22242b] hover:bg-[#282a33]';
+
                       const score1 = match.score?.ft ? match.score.ft[0] : null;
                       const score2 = match.score?.ft ? match.score.ft[1] : null;
 
@@ -429,7 +439,7 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = ({
                         <div
                           key={match.id || `match-${idx}`}
                           id={`match-row-${match.id || idx}`}
-                          className="hover:bg-[#181818] transition-colors cursor-default group"
+                          className={`transition-colors cursor-default group ${cardBgClass}`}
                         >
                           {/* ==================== MOBILE LAYOUT (< 640px) ==================== */}
                           <div className="flex sm:hidden items-center px-3 py-2.5 gap-2.5 border-b border-zinc-900/40">

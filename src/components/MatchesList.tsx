@@ -205,7 +205,15 @@ export const MatchesList: React.FC<MatchesListProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                 {roundMatches.map((match, idx) => {
                   const isLive = match.status === 'live' || !!match.liveMinute;
-                  const isFinished = (match.score && Array.isArray(match.score.ft)) && !isLive;
+                  const isFinished = match.status === 'finished' || ((match.score && Array.isArray(match.score.ft)) && !isLive);
+                  const isUpcoming = !isLive && !isFinished;
+
+                  const cardBgClass = isLive
+                    ? 'bg-[#12241b] hover:bg-[#182c22] border-emerald-500/40 ring-1 ring-emerald-500/20'
+                    : isFinished
+                    ? 'bg-[#141518] hover:bg-[#1a1b1f] border-zinc-800'
+                    : 'bg-[#22242b] hover:bg-[#282a33] border-[#2e313a]';
+
                   const rank1 = getTeamRank(match.team1);
                   const rank2 = getTeamRank(match.team2);
 
@@ -219,9 +227,7 @@ export const MatchesList: React.FC<MatchesListProps> = ({
                     <div
                       key={`${match.team1}-${match.team2}-${idx}`}
                       id={`match-card-${idx}`}
-                      className={`bg-[#111111] hover:bg-[#161616] border rounded-xl p-4 transition-all shadow-lg flex flex-col justify-between gap-3 group ${
-                        isLive ? 'border-emerald-500/40 ring-1 ring-emerald-500/20' : 'border-zinc-800 hover:border-zinc-700'
-                      }`}
+                      className={`rounded-xl p-4 transition-all shadow-lg flex flex-col justify-between gap-3 group ${cardBgClass}`}
                     >
                       {/* Top Bar: Date, Time & Status */}
                       <div className="flex items-center justify-between text-[11px] text-zinc-500 pb-2 border-b border-zinc-800/80">
