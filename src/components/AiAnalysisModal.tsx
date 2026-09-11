@@ -4,6 +4,7 @@ import { calculateHeadToHead } from '../utils/standings';
 import { TeamBadge } from './TeamBadge';
 import { X, Sparkles, AlertCircle } from 'lucide-react';
 import Markdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 
 interface AiAnalysisModalProps {
   isOpen: boolean;
@@ -203,8 +204,8 @@ export const AiAnalysisModal: React.FC<AiAnalysisModalProps> = ({
             </div>
           ) : analysis ? (
             <div className="space-y-4 animate-in fade-in duration-300">
-              <div className="markdown-body text-[13px] sm:text-sm text-zinc-300 leading-relaxed space-y-4">
-                 <Markdown>{analysis.markdown}</Markdown>
+              <div className="markdown-body text-[13px] sm:text-sm text-zinc-300 leading-relaxed whitespace-pre-wrap space-y-4">
+                 <Markdown remarkPlugins={[remarkBreaks]}>{analysis.markdown}</Markdown>
               </div>
             </div>
           ) : null}

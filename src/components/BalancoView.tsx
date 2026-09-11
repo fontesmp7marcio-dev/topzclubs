@@ -15,6 +15,10 @@ import {
   Trash2,
   Edit2,
   RefreshCw,
+  Eye,
+  EyeOff,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { BetItem, BetStatus, Match } from '../types';
 import { BetModal } from './BetModal';
@@ -82,6 +86,7 @@ export const BalancoView: React.FC<BalancoViewProps> = () => {
   const [activeMenuBetId, setActiveMenuBetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [expandedBets, setExpandedBets] = useState<Record<string, boolean>>({});
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
@@ -822,6 +827,7 @@ export const BalancoView: React.FC<BalancoViewProps> = () => {
                         <div className="space-y-2">
                           {day.items.map((bet) => {
                             const isMenuOpen = activeMenuBetId === bet.id;
+                            const isStatsExpanded = !!expandedBets[bet.id];
 
                             return (
                               <div
@@ -967,11 +973,11 @@ export const BalancoView: React.FC<BalancoViewProps> = () => {
                                   </div>
                                 </div>
 
-                                {/* Right Section: Status Pill + Financial Stats */}
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between lg:justify-end gap-2.5 sm:gap-4 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-[#202028]">
+                                {/* Right Section: Status Pill + Toggle Button + Financial Stats */}
+                                <div className="flex flex-row items-center justify-between lg:justify-end gap-2 sm:gap-3.5 shrink-0 pt-2 lg:pt-0 border-t lg:border-t-0 border-[#202028]">
                                   {/* Static Status Badge */}
                                   <span
-                                    className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border self-start sm:self-center shrink-0 shadow-xs ${
+                                    className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border self-center shrink-0 shadow-xs ${
                                       bet.status === 'Ganha'
                                         ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/50'
                                         : bet.status === 'Perdida'
@@ -986,66 +992,103 @@ export const BalancoView: React.FC<BalancoViewProps> = () => {
                                     {bet.status}
                                   </span>
 
-                                  {/* Bottom Stats Grid */}
-                                  <div className="grid grid-cols-4 gap-2 sm:gap-5 text-right">
-                                    {/* COTAÇÃO */}
-                                    <div>
-                                      <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                                        COTAÇÃO
-                                      </span>
-                                      <span className="text-xs font-black text-white font-sans">
-                                        {bet.odd.toFixed(2)}
-                                      </span>
-                                    </div>
+                                  {/* Toggle Details Button */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setExpandedBets((prev) => ({
+                                        ...prev,
+                                        [bet.id]: !prev[bet.id],
+                                      }));
+                                    }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#17171c] hover:bg-[#202028] border border-[#262630] hover:border-zinc-700 text-zinc-400 hover:text-white text-[11px] font-black tracking-tight transition-all cursor-pointer select-none active:scale-95 shrink-0"
+                                    title={isStatsExpanded ? 'Ocultar detalhes financeiros' : 'Ver cotação, valor, ganho e lucro'}
+                                  >
+                                    {isStatsExpanded ? (
+                                      <>
+                                        <EyeOff className="w-3.5 h-3.5 text-rose-400" />
+                                        <span className="hidden sm:inline font-bold">Ocultar</span>
+                                        <ChevronRight className="w-4 h-4 text-zinc-500" />
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Eye className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                                        <span className="font-sans font-bold">
+                                          R$ {bet.profit !== 0 ? `${bet.profit > 0 ? '+' : ''}${bet.profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : 'Ver'}
+                                        </span>
+                                        <ChevronLeft className="w-4 h-4 text-zinc-500" />
+                                      </>
+                                    )}
+                                  </button>
 
-                                    {/* VALOR */}
-                                    <div>
-                                      <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                                        VALOR
-                                      </span>
-                                      <span className="text-xs font-black text-white font-sans">
-                                        {bet.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                        <span className="text-[10px] text-zinc-400 font-bold ml-0.5">R$</span>
-                                      </span>
-                                    </div>
+                                  {/* Sliding Stats Grid */}
+                                  <div
+                                    className={`transition-all duration-300 ease-out overflow-hidden flex items-center ${
+                                      isStatsExpanded
+                                        ? 'max-w-[420px] opacity-100 ml-1.5'
+                                        : 'max-w-0 opacity-0 pointer-events-none'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-3.5 sm:gap-4.5 bg-[#17171c] border border-[#262630] px-3.5 py-1.5 rounded-xl text-right shrink-0">
+                                      {/* COTAÇÃO */}
+                                      <div>
+                                        <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                                          ODD
+                                        </span>
+                                        <span className="text-xs font-black text-white font-sans">
+                                          {bet.odd.toFixed(2)}
+                                        </span>
+                                      </div>
 
-                                    {/* GANHO */}
-                                    <div>
-                                      <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                                        GANHO
-                                      </span>
-                                      <span
-                                        className={`text-xs font-black font-sans ${
-                                          bet.status === 'Ganha'
-                                            ? 'text-emerald-400'
-                                            : 'text-zinc-400'
-                                        }`}
-                                      >
-                                        {bet.status === 'Ganha'
-                                          ? bet.potentialReturn.toLocaleString('pt-BR', { minimumFractionDigits: 2 })
-                                          : '0,00'}
-                                        <span className="text-[10px] font-bold ml-0.5 text-zinc-500">R$</span>
-                                      </span>
-                                    </div>
+                                      {/* VALOR */}
+                                      <div>
+                                        <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                                          STAKE
+                                        </span>
+                                        <span className="text-xs font-black text-white font-sans">
+                                          {bet.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                          <span className="text-[9px] text-zinc-400 font-bold ml-0.5">R$</span>
+                                        </span>
+                                      </div>
 
-                                    {/* LUCRO */}
-                                    <div>
-                                      <span className="block text-[9px] font-bold text-zinc-500 uppercase tracking-wider">
-                                        LUCRO
-                                      </span>
-                                      <span
-                                        className={`text-xs font-black font-sans ${
-                                          bet.status === 'Ganha'
-                                            ? 'text-emerald-400'
-                                            : bet.status === 'Perdida'
-                                            ? 'text-rose-500'
-                                            : 'text-zinc-400'
-                                        }`}
-                                      >
-                                        {bet.status === 'Ganha' && '+'}
-                                        {bet.profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                        <span className="text-[10px] font-bold ml-0.5 text-zinc-500">R$</span>
-                                      </span>
+                                      {/* GANHO */}
+                                      <div>
+                                        <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                                          RETORNO
+                                        </span>
+                                        <span
+                                          className={`text-xs font-black font-sans ${
+                                            bet.status === 'Ganha'
+                                              ? 'text-emerald-400'
+                                              : 'text-zinc-400'
+                                          }`}
+                                        >
+                                          {bet.status === 'Ganha'
+                                            ? bet.potentialReturn.toLocaleString('pt-BR', { minimumFractionDigits: 2 })
+                                            : '0,00'}
+                                          <span className="text-[9px] font-bold ml-0.5 text-zinc-500">R$</span>
+                                        </span>
+                                      </div>
+
+                                      {/* LUCRO */}
+                                      <div>
+                                        <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                                          LUCRO
+                                        </span>
+                                        <span
+                                          className={`text-xs font-black font-sans ${
+                                            bet.status === 'Ganha'
+                                              ? 'text-emerald-400'
+                                              : bet.status === 'Perdida'
+                                              ? 'text-rose-500'
+                                              : 'text-zinc-400'
+                                          }`}
+                                        >
+                                          {bet.status === 'Ganha' && '+'}
+                                          {bet.profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                          <span className="text-[9px] font-bold ml-0.5 text-zinc-500">R$</span>
+                                        </span>
+                                      </div>
                                     </div>
                                   </div>
                                 </div>
@@ -1067,6 +1110,7 @@ export const BalancoView: React.FC<BalancoViewProps> = () => {
       <BetModal
         isOpen={isAddModalOpen || !!editingBet}
         initialBet={editingBet}
+        existingBets={bets}
         onClose={() => {
           setIsAddModalOpen(false);
           setEditingBet(null);

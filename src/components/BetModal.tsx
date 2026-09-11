@@ -8,6 +8,7 @@ import {
   evaluateLegResult,
   evaluateBetStatusFromLegs,
   calculateBetProfit,
+  parseMatchupFromTitle,
 } from '../utils/betSync';
 import { TeamCrest } from './TeamCrest';
 import { MatchupPill } from './MatchupPill';
@@ -20,6 +21,7 @@ interface BetModalProps {
   onSave: (bet: BetItem) => void;
   onDelete?: (id: string) => void;
   initialBet?: BetItem | null;
+  existingBets?: BetItem[];
 }
 
 export const BetModal: React.FC<BetModalProps> = ({
@@ -28,6 +30,7 @@ export const BetModal: React.FC<BetModalProps> = ({
   onSave,
   onDelete,
   initialBet,
+  existingBets = [],
 }) => {
   const isEditing = !!initialBet;
 
@@ -260,6 +263,66 @@ export const BetModal: React.FC<BetModalProps> = ({
     };
   }, [date, isOpen]);
 
+  // Find match IDs and teams used in other existing bets
+  const usedMatchIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    existingBets.forEach((b) => {
+      if (isEditing && initialBet && b.id === initialBet.id) {
+        return;
+      }
+      if (b.legs) {
+        b.legs.forEach((leg) => {
+          const mId = leg.matchId || leg.id;
+          if (mId) ids.add(mId);
+        });
+      }
+    });
+    return ids;
+  }, [existingBets, isEditing, initialBet]);
+
+  const usedTeams = React.useMemo(() => {
+    const teams = new Set<string>();
+    existingBets.forEach((b) => {
+      if (isEditing && initialBet && b.id === initialBet.id) {
+        return;
+      }
+      if (b.legs) {
+        b.legs.forEach((leg) => {
+          if (leg.team1) teams.add(leg.team1.toLowerCase().trim());
+          if (leg.team2) teams.add(leg.team2.toLowerCase().trim());
+        });
+      } else {
+        const parsed = parseMatchupFromTitle(b.title);
+        if (parsed) {
+          if (parsed.team1) teams.add(parsed.team1.toLowerCase().trim());
+          if (parsed.team2) teams.add(parsed.team2.toLowerCase().trim());
+        }
+      }
+    });
+    return teams;
+  }, [existingBets, isEditing, initialBet]);
+
+  const checkIsMatchUsedInOtherBets = React.useCallback((m: Match) => {
+    if (m.id && usedMatchIds.has(m.id)) {
+      return true;
+    }
+    const t1 = m.team1?.toLowerCase().trim();
+    const t2 = m.team2?.toLowerCase().trim();
+    if (t1 && usedTeams.has(t1)) return true;
+    if (t2 && usedTeams.has(t2)) return true;
+    return false;
+  }, [usedMatchIds, usedTeams]);
+
+  const filteredDayMatches = React.useMemo(() => {
+    return dayMatches.filter((m) => {
+      // If the match is already selected in the current bet, keep it so it can be unselected or viewed
+      if (m.id && selectedMatchIds.includes(m.id)) {
+        return true;
+      }
+      return !checkIsMatchUsedInOtherBets(m);
+    });
+  }, [dayMatches, selectedMatchIds, checkIsMatchUsedInOtherBets]);
+
   // Helper to check if match contains a favorite team
   const checkIsFavorite = React.useCallback((m: Match, favList: { id: number; name: string; country?: string; league?: string }[]) => {
     if (!m) return false;
@@ -275,17 +338,17 @@ export const BetModal: React.FC<BetModalProps> = ({
   }, []);
 
   const favoriteMatches = React.useMemo(() => {
-    if (!dayMatches.length) return [];
-    return dayMatches.filter((m) => checkIsFavorite(m, userFavorites));
-  }, [dayMatches, userFavorites, checkIsFavorite]);
+    if (!filteredDayMatches.length) return [];
+    return filteredDayMatches.filter((m) => checkIsFavorite(m, userFavorites));
+  }, [filteredDayMatches, userFavorites, checkIsFavorite]);
 
   const hasFavoriteMatches = favoriteMatches.length > 0;
 
   const relevantMatches = React.useMemo(() => {
-    if (!dayMatches.length) return [];
+    if (!filteredDayMatches.length) return [];
     if (hasFavoriteMatches) return favoriteMatches;
-    return dayMatches.slice(0, 15);
-  }, [dayMatches, hasFavoriteMatches, favoriteMatches]);
+    return filteredDayMatches.slice(0, 15);
+  }, [filteredDayMatches, hasFavoriteMatches, favoriteMatches]);
 
   // Handle toggling a match in the selection (up to 5 matches)
   const handleToggleMatch = (match: Match) => {
