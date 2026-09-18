@@ -1,0 +1,6 @@
+{
+  "name": "TOPZCLUBS - Futebol Ao Vivo",
+  "description": "Plataforma de futebol ao vivo com placares em tempo real, clubes favoritos, escalações táticas e estatísticas completas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

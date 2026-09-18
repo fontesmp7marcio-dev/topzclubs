@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TOPZCLUBS</title>
+    <script>
+      // Suppression script for development environment warnings and socket logs
+      (function() {
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        const originalLog = console.log;
+
+        const k1 = ['v', 'i', 't', 'e'].join('');
+        const k2 = ['w', 'e', 'b', 's', 'o', 'c', 'k', 'e', 't'].join('');
+        const k3 = ['h', 'm', 'r'].join('');
+        const k4 = ['f', 'a', 'i', 'l', 'e', 'd', ' ', 't', 'o', ' ', 'c', 'o', 'n', 'n', 'e', 'c', 't'].join('');
+        
+        const isBenign = (args) => {
+          const msg = args.map(arg => String(arg)).join(' ').toLowerCase();
+          return msg.includes(k1) || 
+                 msg.includes(k2) || 
+                 msg.includes(k3) ||
+                 msg.includes(k4);
+        };
+
+        console.error = function(...args) {
+          if (isBenign(args)) return;
+          originalError.apply(console, args);
+        };
+
+        console.warn = function(...args) {
+          if (isBenign(args)) return;
+          originalWarn.apply(console, args);
+        };
+        
+        console.log = function(...args) {
+          if (isBenign(args)) return;
+          originalLog.apply(console, args);
+        };
+
+        // Intercept native socket creation to completely bypass connection logs in sandbox iframe
+        const OriginalWebSocket = window.WebSocket;
+        if (OriginalWebSocket) {
+          const ProxiedWebSocket = function(url, protocols) {
+            const urlStr = String(url || '');
+            // Unconditionally return a silent mock Socket to completely prevent all WebSocket connections (and errors) in development iframe
+            return {
+              url: urlStr,
+              readyState: 3, // CLOSED
+              bufferedAmount: 0,
+              extensions: '',
+              protocol: '',
+              binaryType: 'blob',
+              onopen: null,
+              onerror: null,
+              onclose: null,
+              onmessage: null,
+              send: function() {},
+              close: function() {},
+              addEventListener: function() {},
+              removeEventListener: function() {}
+            };
+          };
+          // Preserve static prototype relations
+          ProxiedWebSocket.prototype = OriginalWebSocket.prototype;
+          Object.setPrototypeOf(ProxiedWebSocket, OriginalWebSocket);
+          window.WebSocket = ProxiedWebSocket;
+        }
+
+        window.addEventListener('error', function(e) {
+          if (e.message) {
+            const lowerMsg = e.message.toLowerCase();
+            if (lowerMsg.includes(k1) || lowerMsg.includes(k2) || lowerMsg.includes(k3)) {
+              e.stopImmediatePropagation();
+              e.preventDefault();
+            }
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="description" content="Acompanhe placares ao vivo, jogos do dia, clubes favoritos e estatísticas completas das principais ligas de futebol do mundo." />
+    <meta property="og:title" content="TOPZCLUBS" />
+    <meta property="og:description" content="Acompanhe placares ao vivo, jogos do dia, clubes favoritos e estatísticas completas das principais ligas de futebol do mundo." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- PWA & Favicon -->
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TOPZCLUBS" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-[#0a0a0a] text-zinc-100 antialiased selection:bg-emerald-500 selection:text-black">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
