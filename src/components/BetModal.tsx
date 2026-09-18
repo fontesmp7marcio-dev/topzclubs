@@ -157,7 +157,7 @@ export const BetModal: React.FC<BetModalProps> = ({
           const existing = prevLegs.find((l) => l.id === m.id || l.matchId === m.id);
           const homeScore = m.score?.ft?.[0];
           const awayScore = m.score?.ft?.[1];
-          const defaultMarket = existing?.market || 'HOME_WIN';
+          const defaultMarket = existing?.market || 'OVER_1_5';
           const meta = getMarketMetadata(defaultMarket, m.team1, m.team2);
           const autoStatus = evaluateLegResult(defaultMarket, homeScore, awayScore, m.status);
           const settledScore: [number, number] | null =
