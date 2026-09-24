@@ -254,6 +254,9 @@ export interface BetLeg {
   matchStatus?: 'scheduled' | 'live' | 'finished' | 'postponed' | 'halftime';
   time?: string;
   note?: string;
+  league?: string;
+  competition?: string;
+  leagueName?: string;
 }
 
 export interface BetItem {

@@ -182,6 +182,7 @@ export const BetModal: React.FC<BetModalProps> = ({
             settledScore,
             matchStatus: m.status,
             time: m.time,
+            league: (m as any).leagueName || (m as any).competition || (m as any).league || existing?.league || '',
           };
         });
 
@@ -840,13 +841,13 @@ export const BetModal: React.FC<BetModalProps> = ({
                 )}
 
                 <div className="grid grid-cols-1 gap-2 max-h-64 overflow-y-auto pr-1">
-                  {displayedMatchItems.map((item) => {
+                  {displayedMatchItems.map((item, idx) => {
                     const m = item.match;
                     const isChecked = selectedMatchIds.includes(m.id);
 
                     return (
                       <div
-                        key={m.id}
+                        key={`${m.id}_${idx}`}
                         onClick={() => handleToggleMatch(m)}
                         className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-left ${
                           isChecked
@@ -1047,7 +1048,7 @@ export const BetModal: React.FC<BetModalProps> = ({
 
                   return (
                     <div
-                      key={leg.id || idx}
+                      key={`${leg.id || leg.matchId || 'leg'}_${idx}`}
                       className="bg-[#1a1a22] border border-[#2e2e3c] rounded-xl p-3 space-y-2.5 shadow-xs"
                     >
                       {/* Top Row: Index + Confrontation Pill + Real Score + Remove button */}

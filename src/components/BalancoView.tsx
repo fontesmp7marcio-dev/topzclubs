@@ -20,11 +20,13 @@ import {
   ChevronLeft,
   ChevronRight,
   Calculator,
+  ShieldAlert,
 } from 'lucide-react';
 import { BetItem, BetStatus, Match, MatchFilters, MatchItem } from '../types';
 import { BetModal } from './BetModal';
 import { MatchupPill } from './MatchupPill';
 import { SimuladorBanca } from './SimuladorBanca';
+import { RelatorioConfrontos } from './RelatorioConfrontos';
 import {
   calculateBankrollStats,
   calculateBetProfit,
@@ -98,7 +100,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [expandedBets, setExpandedBets] = useState<Record<string, boolean>>({});
   const [expandedMatches, setExpandedMatches] = useState<Record<string, boolean>>({});
-  const [activeBalancoTab, setActiveBalancoTab] = useState<'geral' | 'simulador'>('geral');
+  const [activeBalancoTab, setActiveBalancoTab] = useState<'geral' | 'simulador' | 'relatorio'>('geral');
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
@@ -546,21 +548,21 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
         </div>
       </div>
 
-      {/* Sub-navigation Tabs: Balanço Geral vs Simulador */}
-      <div className="flex items-center gap-2 border-b border-[#222228] pb-1 overflow-x-auto scrollbar-none">
+      {/* Sub-navigation Tabs: Balanço Geral vs Simulador vs Relatório */}
+      <div className="flex items-center gap-1.5 sm:gap-2 border-b border-[#222228] pb-1.5 overflow-x-auto scrollbar-none -mx-1 px-1">
         <button
           id="tab-balanco-geral"
           onClick={() => setActiveBalancoTab('geral')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 active:scale-95 ${
             activeBalancoTab === 'geral'
               ? 'bg-white text-black border-white shadow-sm'
               : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
           }`}
         >
-          <BarChart3 className="w-4 h-4" />
-          <span>BALANÇO GERAL & HISTÓRICO</span>
+          <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+          <span>BALANÇO GERAL</span>
           <span
-            className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+            className={`px-1.5 py-0.5 rounded-md text-[9px] sm:text-[10px] font-bold ${
               activeBalancoTab === 'geral' ? 'bg-black/10 text-black' : 'bg-zinc-800 text-zinc-300'
             }`}
           >
@@ -571,16 +573,32 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
         <button
           id="tab-balanco-simulador"
           onClick={() => setActiveBalancoTab('simulador')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 ${
+          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 active:scale-95 ${
             activeBalancoTab === 'simulador'
               ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/30'
               : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
           }`}
         >
-          <Calculator className="w-4 h-4 text-amber-300" />
-          <span>SIMULADOR DE BANCA & ODDS</span>
-          <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase bg-[#ccff00]/20 text-[#ccff00] border border-[#ccff00]/30">
+          <Calculator className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-300 shrink-0" />
+          <span>SIMULADOR DE BANCA</span>
+          <span className="px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black uppercase bg-[#ccff00]/20 text-[#ccff00] border border-[#ccff00]/30">
             PROJEÇÃO
+          </span>
+        </button>
+
+        <button
+          id="tab-balanco-relatorio"
+          onClick={() => setActiveBalancoTab('relatorio')}
+          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 active:scale-95 ${
+            activeBalancoTab === 'relatorio'
+              ? 'bg-rose-600 text-white border-rose-500 shadow-md shadow-rose-600/30'
+              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
+          }`}
+        >
+          <ShieldAlert className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-300 shrink-0" />
+          <span>RAIO-X DE REDS</span>
+          <span className="px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/30">
+            RELATÓRIO
           </span>
         </button>
       </div>
@@ -590,6 +608,11 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
           bets={bets}
           realInitialCapital={initialCapital}
           realStats={stats}
+        />
+      ) : activeBalancoTab === 'relatorio' ? (
+        <RelatorioConfrontos
+          bets={bets}
+          supabaseFavorites={supabaseFavorites}
         />
       ) : (
         <>
@@ -884,13 +907,13 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
 
                         {/* Bet Items in this Day */}
                         <div className="space-y-2">
-                          {day.items.map((bet) => {
+                          {day.items.map((bet, bIdx) => {
                             const isMenuOpen = activeMenuBetId === bet.id;
                             const isStatsExpanded = !!expandedBets[bet.id];
 
                             return (
                               <div
-                                key={bet.id}
+                                key={`${bet.id}_${bIdx}`}
                                 id={`bet-row-${bet.id}`}
                                 onDoubleClick={(e) => {
                                   e.stopPropagation();
@@ -1162,7 +1185,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
 
                                             return (
                                               <MatchupPill
-                                                key={leg.id || lIdx}
+                                                key={`${bet.id}_leg_${leg.id || lIdx}_${lIdx}`}
                                                 team1={leg.team1 || ''}
                                                 team2={leg.team2 || ''}
                                                 team1Id={leg.team1Id}
