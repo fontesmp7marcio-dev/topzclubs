@@ -19,10 +19,12 @@ import {
   EyeOff,
   ChevronLeft,
   ChevronRight,
+  Calculator,
 } from 'lucide-react';
 import { BetItem, BetStatus, Match, MatchFilters, MatchItem } from '../types';
 import { BetModal } from './BetModal';
 import { MatchupPill } from './MatchupPill';
+import { SimuladorBanca } from './SimuladorBanca';
 import {
   calculateBankrollStats,
   calculateBetProfit,
@@ -96,6 +98,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [expandedBets, setExpandedBets] = useState<Record<string, boolean>>({});
   const [expandedMatches, setExpandedMatches] = useState<Record<string, boolean>>({});
+  const [activeBalancoTab, setActiveBalancoTab] = useState<'geral' | 'simulador'>('geral');
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
@@ -543,8 +546,55 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
         </div>
       </div>
 
-      {/* 4 Stat Cards Row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      {/* Sub-navigation Tabs: Balanço Geral vs Simulador */}
+      <div className="flex items-center gap-2 border-b border-[#222228] pb-1 overflow-x-auto scrollbar-none">
+        <button
+          id="tab-balanco-geral"
+          onClick={() => setActiveBalancoTab('geral')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 ${
+            activeBalancoTab === 'geral'
+              ? 'bg-white text-black border-white shadow-sm'
+              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4" />
+          <span>BALANÇO GERAL & HISTÓRICO</span>
+          <span
+            className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+              activeBalancoTab === 'geral' ? 'bg-black/10 text-black' : 'bg-zinc-800 text-zinc-300'
+            }`}
+          >
+            {stats.totalBets}
+          </span>
+        </button>
+
+        <button
+          id="tab-balanco-simulador"
+          onClick={() => setActiveBalancoTab('simulador')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 ${
+            activeBalancoTab === 'simulador'
+              ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/30'
+              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
+          }`}
+        >
+          <Calculator className="w-4 h-4 text-amber-300" />
+          <span>SIMULADOR DE BANCA & ODDS</span>
+          <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase bg-[#ccff00]/20 text-[#ccff00] border border-[#ccff00]/30">
+            PROJEÇÃO
+          </span>
+        </button>
+      </div>
+
+      {activeBalancoTab === 'simulador' ? (
+        <SimuladorBanca
+          bets={bets}
+          realInitialCapital={initialCapital}
+          realStats={stats}
+        />
+      ) : (
+        <>
+          {/* 4 Stat Cards Row */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         
         {/* Card 1: APOSTAS */}
         <div 
@@ -1160,6 +1210,8 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
             );
           })}
         </div>
+      )}
+        </>
       )}
 
       {/* Add / Edit Bet Modal */}
