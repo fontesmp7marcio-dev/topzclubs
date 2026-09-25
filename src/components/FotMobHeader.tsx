@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Search, Settings, Smartphone, Apple, Menu, X, Shield, RefreshCw, BarChart3, Bell } from 'lucide-react';
+import { Search, Settings, Smartphone, Apple, Menu, X, Shield, RefreshCw, BarChart3, Calculator, ShieldAlert } from 'lucide-react';
 import { LeagueOption } from '../types';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -89,35 +89,53 @@ export const FotMobHeader: React.FC<FotMobHeaderProps> = ({
             </span>
           </a>
 
-          {/* Menu Balanço (Apenas Ícone) */}
-          <button
-            id="btn-header-balanco"
-            onClick={() => onNavTabChange('balanco')}
-            className={`flex items-center justify-center p-2 sm:p-2.5 rounded-xl transition-all cursor-pointer shrink-0 ${
-              activeNavTab === 'balanco'
-                ? 'bg-[#ccff00] text-black shadow-sm font-black'
-                : 'bg-[#181818] text-zinc-300 hover:text-white hover:bg-[#222222] border border-[#282828]'
-            }`}
-            title="Balanço Financeiro"
-            aria-label="Balanço Financeiro"
-          >
-            <BarChart3 className="w-4 h-4" />
-          </button>
+          {/* 3 Menus no Topo: Balanço, Simulador, Raio-X (Apenas Ícones para responsividade mobile/Android) */}
+          <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+            {/* 1. Menu Balanço */}
+            <button
+              id="btn-header-balanco"
+              onClick={() => onNavTabChange('balanco')}
+              className={`flex items-center justify-center p-2 sm:p-2.5 rounded-xl transition-all cursor-pointer shrink-0 ${
+                activeNavTab === 'balanco'
+                  ? 'bg-[#ccff00] text-black shadow-sm font-black'
+                  : 'bg-[#181818] text-zinc-300 hover:text-white hover:bg-[#222222] border border-[#282828]'
+              }`}
+              title="Balanço Geral"
+              aria-label="Balanço Geral"
+            >
+              <BarChart3 className="w-4 h-4" />
+            </button>
 
-          {/* Menu Notificações (Apenas Ícone) */}
-          <button
-            id="btn-header-notificacoes"
-            onClick={() => onNavTabChange('notificacoes')}
-            className={`flex items-center justify-center p-2 sm:p-2.5 rounded-xl transition-all cursor-pointer shrink-0 ${
-              activeNavTab === 'notificacoes'
-                ? 'bg-amber-400 text-black shadow-sm font-black'
-                : 'bg-[#181818] text-zinc-300 hover:text-white hover:bg-[#222222] border border-[#282828]'
-            }`}
-            title="Configurações de Notificações"
-            aria-label="Configurações de Notificações"
-          >
-            <Bell className="w-4 h-4" />
-          </button>
+            {/* 2. Menu Simulador de Banca */}
+            <button
+              id="btn-header-simulador"
+              onClick={() => onNavTabChange('simulador')}
+              className={`flex items-center justify-center p-2 sm:p-2.5 rounded-xl transition-all cursor-pointer shrink-0 ${
+                activeNavTab === 'simulador'
+                  ? 'bg-indigo-600 text-white shadow-sm font-black'
+                  : 'bg-[#181818] text-zinc-300 hover:text-white hover:bg-[#222222] border border-[#282828]'
+              }`}
+              title="Simulador de Banca"
+              aria-label="Simulador de Banca"
+            >
+              <Calculator className="w-4 h-4" />
+            </button>
+
+            {/* 3. Menu Raio-X */}
+            <button
+              id="btn-header-raio-x"
+              onClick={() => onNavTabChange('raio-x')}
+              className={`flex items-center justify-center p-2 sm:p-2.5 rounded-xl transition-all cursor-pointer shrink-0 ${
+                activeNavTab === 'raio-x'
+                  ? 'bg-rose-600 text-white shadow-sm font-black'
+                  : 'bg-[#181818] text-zinc-300 hover:text-white hover:bg-[#222222] border border-[#282828]'
+              }`}
+              title="Raio-X de Reds / Confrontos"
+              aria-label="Raio-X de Reds"
+            >
+              <ShieldAlert className="w-4 h-4" />
+            </button>
+          </div>
 
           {/* Search Bar matching FotMob (Pill shape, dark grey bg, light placeholder) */}
           <div className="hidden sm:flex items-center relative w-44 lg:w-72 ml-1">

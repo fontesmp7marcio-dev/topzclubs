@@ -11,8 +11,11 @@ import { TeamDetailModal } from './components/TeamDetailModal';
 import { AiAnalysisModal } from './components/AiAnalysisModal';
 import { CalendarPickerModal } from './components/CalendarPickerModal';
 import { BalancoView } from './components/BalancoView';
+import { SimuladorBanca } from './components/SimuladorBanca';
+import { RelatorioConfrontos } from './components/RelatorioConfrontos';
 import { NotificacoesView } from './components/NotificacoesView';
 import { InAppNotificationModal } from './components/InAppNotificationModal';
+import { useBalancoData } from './hooks/useBalancoData';
 import { calculateStandings } from './utils/standings';
 import { getBrasiliaTodayStr, addDaysToDateStr } from './utils/dateUtils';
 import { isFemaleOrWomensMatch } from './utils/femaleFilter';
@@ -38,6 +41,9 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => getBrasiliaTodayStr());
   const [isCalendarOpen, setIsCalendarOpen] = useState<boolean>(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
+
+  // Global shared state for Balanço, Simulador de Banca and Raio-X
+  const balancoData = useBalancoData();
 
   // Synchronized Filter State (Competição: Liga/Copa, Mando: Casa/Fora, Histórico: 5/10)
   const [filters, setFilters] = useState<MatchFilters>(DEFAULT_MATCH_FILTERS);
@@ -555,7 +561,7 @@ export default function App() {
         onNavTabChange={setActiveNavTab}
       />
 
-      {/* 2. MAIN 2-COLUMN CONTAINER, BALANÇO VIEW, OR NOTIFICAÇÕES VIEW */}
+      {/* 2. MAIN 2-COLUMN CONTAINER, BALANÇO VIEW, SIMULADOR VIEW, RAIO-X VIEW, OR NOTIFICAÇÕES VIEW */}
       <main className="max-w-[1440px] w-full mx-auto px-2 sm:px-4 lg:px-6 py-4 flex-1">
         {activeNavTab === 'balanco' ? (
           <BalancoView
@@ -563,7 +569,23 @@ export default function App() {
             teamForms={favoriteForms}
             teamRawMatches={teamRawMatches}
             filters={filters}
+            balancoData={balancoData}
           />
+        ) : activeNavTab === 'simulador' ? (
+          <div className="w-full max-w-7xl mx-auto px-1 sm:px-4 py-4 animate-fade-in">
+            <SimuladorBanca
+              bets={balancoData.bets}
+              realInitialCapital={balancoData.initialCapital}
+              realStats={balancoData.stats}
+            />
+          </div>
+        ) : activeNavTab === 'raio-x' ? (
+          <div className="w-full max-w-7xl mx-auto px-1 sm:px-4 py-4 animate-fade-in">
+            <RelatorioConfrontos
+              bets={balancoData.bets}
+              supabaseFavorites={supabaseFavorites}
+            />
+          </div>
         ) : activeNavTab === 'notificacoes' ? (
           <NotificacoesView />
         ) : (

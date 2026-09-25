@@ -19,14 +19,10 @@ import {
   EyeOff,
   ChevronLeft,
   ChevronRight,
-  Calculator,
-  ShieldAlert,
 } from 'lucide-react';
 import { BetItem, BetStatus, Match, MatchFilters, MatchItem } from '../types';
 import { BetModal } from './BetModal';
 import { MatchupPill } from './MatchupPill';
-import { SimuladorBanca } from './SimuladorBanca';
-import { RelatorioConfrontos } from './RelatorioConfrontos';
 import {
   calculateBankrollStats,
   calculateBetProfit,
@@ -34,6 +30,7 @@ import {
   parseMatchupFromTitle,
   getMarketLabel,
 } from '../utils/betSync';
+import { useBalancoData } from '../hooks/useBalancoData';
 
 interface DayGroup {
   dayKey: string;
@@ -49,209 +46,51 @@ interface MonthGroup {
   days: Record<string, DayGroup>;
 }
 
-interface BalancoViewProps {
+export interface BalancoViewProps {
   supabaseFavorites?: { id: number; name: string; country?: string; league?: string }[];
-  teamForms?: Record<number, string[]>;
-  teamRawMatches?: Record<number, MatchItem[]>;
+  teamForms?: Record<string | number, string[]>;
+  teamRawMatches?: Record<string | number, MatchItem[]>;
   filters?: MatchFilters;
+  balancoData?: ReturnType<typeof useBalancoData>;
 }
-
-const LOCAL_STORAGE_BETS_KEY = 'topzclubs_balanco_bets_v1';
-const LOCAL_STORAGE_BANKROLL_KEY = 'topzclubs_balanco_bankroll_v1';
 
 export const BalancoView: React.FC<BalancoViewProps> = ({
   supabaseFavorites,
   teamForms,
   teamRawMatches,
   filters,
+  balancoData: externalBalancoData,
 }) => {
-  // Bets and Bankroll State
-  const [bets, setBets] = useState<BetItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_BETS_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (e) {
-      console.warn('Error reading bets from localStorage:', e);
-    }
-    // Clean initial state (zeroed, no February hardcoded entries)
-    return [];
-  });
+  const internalBalancoData = useBalancoData();
+  const balancoData = externalBalancoData || internalBalancoData;
 
-  const [initialCapital, setInitialCapital] = useState<number>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_BANKROLL_KEY);
-      if (saved) {
-        const val = parseFloat(saved);
-        if (!isNaN(val)) return val;
-      }
-    } catch {}
-    return 26.0;
-  });
+  const {
+    bets,
+    setBets,
+    initialCapital,
+    setInitialCapital,
+    stats,
+    notification,
+    isSyncing,
+    handleSyncAllMatchResults,
+    handleSaveBet,
+    handleDeleteBet,
+    handleSaveBankroll,
+  } = balancoData;
 
   // UI States
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('Todas');
   const [collapsedMonths, setCollapsedMonths] = useState<Record<string, boolean>>({});
   const [activeMenuBetId, setActiveMenuBetId] = useState<string | null>(null);
-  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [expandedBets, setExpandedBets] = useState<Record<string, boolean>>({});
   const [expandedMatches, setExpandedMatches] = useState<Record<string, boolean>>({});
-  const [activeBalancoTab, setActiveBalancoTab] = useState<'geral' | 'simulador' | 'relatorio'>('geral');
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
   const [editingBet, setEditingBet] = useState<BetItem | null>(null);
   const [isBankrollModalOpen, setIsBankrollModalOpen] = useState<boolean>(false);
   const [tempBankroll, setTempBankroll] = useState<string>('26,00');
-
-  // Load bets and bankroll from Supabase on mount
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadSupabaseData() {
-      try {
-        const [betsRes, bankrollRes] = await Promise.all([
-          fetch('/api/user-bets').then((r) => r.json()).catch(() => null),
-          fetch('/api/user-bankroll').then((r) => r.json()).catch(() => null),
-        ]);
-
-        if (!isMounted) return;
-
-        if (betsRes && betsRes.success && Array.isArray(betsRes.bets)) {
-          setBets(betsRes.bets);
-          // Automatic silent background sync for any loaded bets with pending status or legs
-          if (betsRes.bets.some((b: BetItem) => b.status === 'Pendente' || (b.legs && b.legs.length > 0))) {
-            handleSyncAllMatchResults(true, betsRes.bets);
-          }
-        }
-        if (bankrollRes && bankrollRes.success && typeof bankrollRes.initialCapital === 'number') {
-          setInitialCapital(bankrollRes.initialCapital);
-        }
-      } catch (e) {
-        console.warn('Error loading balance data from Supabase:', e);
-      }
-    }
-
-    loadSupabaseData();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // Sincronização Completa de Resultados dos Jogos com Apostas e Balanço
-  const handleSyncAllMatchResults = async (silent = false, customBets?: BetItem[]) => {
-    if (isSyncing) return;
-    setIsSyncing(true);
-
-    try {
-      const sourceBets = customBets || bets;
-      // Identifica todas as datas distintas com apostas que possuem seleções ou estão pendentes
-      const datesToFetch: string[] = Array.from(
-        new Set(
-          sourceBets
-            .filter((b) => Boolean(b.date) && (b.status === 'Pendente' || (b.legs && b.legs.length > 0)))
-            .map((b) => b.date)
-        )
-      );
-
-      if (datesToFetch.length === 0) {
-        if (!silent) {
-          setNotification({
-            message: 'Nenhuma aposta pendente para sincronizar.',
-            type: 'info',
-          });
-        }
-        setIsSyncing(false);
-        return;
-      }
-
-      // Busca as partidas de todas essas datas em paralelo
-      const matchesByDate: Record<string, Match[]> = {};
-      await Promise.all(
-        datesToFetch.map(async (d) => {
-          try {
-            const res = await fetch(`/api/fotmob/matches-by-date?date=${d}`);
-            const data = await res.json();
-            if (data && Array.isArray(data.matches)) {
-              matchesByDate[d] = data.matches;
-            }
-          } catch (e) {
-            console.warn(`Failed to fetch matches for date ${d}:`, e);
-          }
-        })
-      );
-
-      // Sincroniza cada aposta com os resultados oficiais das partidas
-      let updatedCount = 0;
-      const updatedBets = sourceBets.map((bet) => {
-        const dayMatches = matchesByDate[bet.date] || [];
-        const { updatedBet, changed } = syncBetWithMatches(bet, dayMatches);
-        if (changed) {
-          updatedCount++;
-          // Persiste imediatamente a aposta atualizada no Supabase
-          fetch('/api/user-bets', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatedBet),
-          }).catch((err) => console.warn('Error syncing bet with Supabase:', err));
-          return updatedBet;
-        }
-        return bet;
-      });
-
-      if (updatedCount > 0) {
-        setBets(updatedBets);
-        setNotification({
-          message: `Sincronização concluída! ${updatedCount} ${updatedCount === 1 ? 'aposta atualizada' : 'apostas atualizadas'}.`,
-          type: 'success',
-        });
-      } else if (!silent) {
-        setNotification({
-          message: 'Todas as apostas já estão 100% atualizadas com os resultados oficiais.',
-          type: 'info',
-        });
-      }
-    } catch (err) {
-      console.error('Error during match sync:', err);
-      if (!silent) {
-        setNotification({
-          message: 'Erro ao sincronizar resultados com os servidores de dados.',
-          type: 'info',
-        });
-      }
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  // Save to localStorage on bets change
-  useEffect(() => {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_BETS_KEY, JSON.stringify(bets));
-    } catch (e) {
-      console.warn('Error saving to localStorage:', e);
-    }
-  }, [bets]);
-
-  // Save bankroll to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_BANKROLL_KEY, String(initialCapital));
-    } catch (e) {}
-  }, [initialCapital]);
-
-  // Auto-dismiss notification
-  useEffect(() => {
-    if (notification) {
-      const timer = setTimeout(() => setNotification(null), 3000);
-      return () => clearTimeout(timer);
-    }
-  }, [notification]);
 
   // Close row popup menu when clicking outside
   useEffect(() => {
@@ -261,13 +100,6 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
-
-  // ==========================================
-  // CALCULATIONS (SINGLE SOURCE OF TRUTH)
-  // ==========================================
-  const stats = useMemo(() => {
-    return calculateBankrollStats(bets, initialCapital);
-  }, [bets, initialCapital]);
 
   // Filtered bets
   const filteredBets = useMemo(() => {
@@ -376,59 +208,9 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
   }, [filteredBets]);
 
   // Handlers
-  const handleSaveBet = async (bet: BetItem) => {
-    // Ensure profit is strictly derived from single source of truth
-    const calculatedProfit = calculateBetProfit(bet.status, bet.amount, bet.odd);
-    const sanitizedBet: BetItem = {
-      ...bet,
-      profit: calculatedProfit,
-    };
-
-    // Optimistic local update
-    setBets((prev) => {
-      const idx = prev.findIndex((b) => b.id === sanitizedBet.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = sanitizedBet;
-        return next;
-      }
-      return [sanitizedBet, ...prev];
-    });
-
-    setNotification({
-      message: `Aposta "${sanitizedBet.title}" salva com sucesso!`,
-      type: 'success',
-    });
-
-    // Sync with Supabase
-    try {
-      await fetch('/api/user-bets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(sanitizedBet),
-      });
-    } catch (e) {
-      console.warn('Error saving bet to Supabase:', e);
-    }
-  };
-
-  const handleDeleteBet = async (betId: string) => {
-    // 100% reliable local removal
-    setBets((prev) => prev.filter((b) => b.id !== betId));
+  const handleDeleteBetClick = async (betId: string) => {
     setActiveMenuBetId(null);
-    setNotification({
-      message: 'Aposta excluída com sucesso!',
-      type: 'info',
-    });
-
-    // Sync delete with Supabase
-    try {
-      await fetch(`/api/user-bets/${encodeURIComponent(betId)}`, {
-        method: 'DELETE',
-      });
-    } catch (e) {
-      console.warn('Error deleting bet from Supabase:', e);
-    }
+    await handleDeleteBet(betId);
   };
 
   const handleToggleMonth = (monthKey: string) => {
@@ -438,28 +220,11 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
     }));
   };
 
-  const handleSaveBankroll = async () => {
+  const handleSaveBankrollClick = async () => {
     const val = parseFloat(tempBankroll.replace(',', '.'));
     if (!isNaN(val) && val >= 0) {
-      setInitialCapital(val);
+      await handleSaveBankroll(val);
       setIsBankrollModalOpen(false);
-      setNotification({
-        message: `Banca inicial ajustada para ${val.toLocaleString('pt-BR', {
-          minimumFractionDigits: 2,
-        })} R$`,
-        type: 'success',
-      });
-
-      // Sync bankroll with Supabase
-      try {
-        await fetch('/api/user-bankroll', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ initialCapital: val }),
-        });
-      } catch (e) {
-        console.warn('Error saving bankroll to Supabase:', e);
-      }
     }
   };
 
@@ -548,76 +313,8 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
         </div>
       </div>
 
-      {/* Sub-navigation Tabs: Balanço Geral vs Simulador vs Relatório */}
-      <div className="flex items-center gap-1.5 sm:gap-2 border-b border-[#222228] pb-1.5 overflow-x-auto scrollbar-none -mx-1 px-1">
-        <button
-          id="tab-balanco-geral"
-          onClick={() => setActiveBalancoTab('geral')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 active:scale-95 ${
-            activeBalancoTab === 'geral'
-              ? 'bg-white text-black border-white shadow-sm'
-              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
-          }`}
-        >
-          <BarChart3 className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-          <span>BALANÇO GERAL</span>
-          <span
-            className={`px-1.5 py-0.5 rounded-md text-[9px] sm:text-[10px] font-bold ${
-              activeBalancoTab === 'geral' ? 'bg-black/10 text-black' : 'bg-zinc-800 text-zinc-300'
-            }`}
-          >
-            {stats.totalBets}
-          </span>
-        </button>
-
-        <button
-          id="tab-balanco-simulador"
-          onClick={() => setActiveBalancoTab('simulador')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 active:scale-95 ${
-            activeBalancoTab === 'simulador'
-              ? 'bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/30'
-              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
-          }`}
-        >
-          <Calculator className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-300 shrink-0" />
-          <span>SIMULADOR DE BANCA</span>
-          <span className="px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black uppercase bg-[#ccff00]/20 text-[#ccff00] border border-[#ccff00]/30">
-            PROJEÇÃO
-          </span>
-        </button>
-
-        <button
-          id="tab-balanco-relatorio"
-          onClick={() => setActiveBalancoTab('relatorio')}
-          className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-2 sm:py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 active:scale-95 ${
-            activeBalancoTab === 'relatorio'
-              ? 'bg-rose-600 text-white border-rose-500 shadow-md shadow-rose-600/30'
-              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white hover:bg-[#1a1a1e]'
-          }`}
-        >
-          <ShieldAlert className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-300 shrink-0" />
-          <span>RAIO-X DE REDS</span>
-          <span className="px-1.5 py-0.5 rounded-md text-[8px] sm:text-[9px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/30">
-            RELATÓRIO
-          </span>
-        </button>
-      </div>
-
-      {activeBalancoTab === 'simulador' ? (
-        <SimuladorBanca
-          bets={bets}
-          realInitialCapital={initialCapital}
-          realStats={stats}
-        />
-      ) : activeBalancoTab === 'relatorio' ? (
-        <RelatorioConfrontos
-          bets={bets}
-          supabaseFavorites={supabaseFavorites}
-        />
-      ) : (
-        <>
-          {/* 4 Stat Cards Row */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      {/* 4 Stat Cards Row */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         
         {/* Card 1: APOSTAS */}
         <div 
@@ -1234,8 +931,6 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
           })}
         </div>
       )}
-        </>
-      )}
 
       {/* Add / Edit Bet Modal */}
       <BetModal
@@ -1298,7 +993,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                 Cancelar
               </button>
               <button
-                onClick={handleSaveBankroll}
+                onClick={handleSaveBankrollClick}
                 className="px-4 py-2 rounded-xl text-xs font-black text-white bg-indigo-600 hover:bg-indigo-500 shadow-md transition-all cursor-pointer uppercase tracking-wider"
               >
                 Salvar Banca
