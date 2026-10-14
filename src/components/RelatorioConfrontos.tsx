@@ -24,14 +24,22 @@ import {
   Check,
   Globe,
   SlidersHorizontal,
+  Flame,
 } from 'lucide-react';
-import { BetItem, BetLeg, BetLegStatus } from '../types';
+import { BetItem, BetLeg, BetLegStatus, MatchItem } from '../types';
 import { resolveMatchLeague } from '../utils/leagueResolver';
-import { normalizeTeamName } from '../data/favoriteClubs';
+import { normalizeTeamName, USER_FAVORITE_CLUBS_DATA } from '../data/favoriteClubs';
+import {
+  getOrComputeTeamEmojis,
+  getEndingFireStreak,
+  getEndingLossStreak,
+} from '../utils/competitionFilter';
 
 interface RelatorioConfrontosProps {
   bets: BetItem[];
   supabaseFavorites?: { id: number; name: string; country?: string; league?: string }[];
+  teamForms?: Record<string | number, string[]>;
+  teamRawMatches?: Record<string | number, MatchItem[]>;
 }
 
 export interface EnrichedLeg {
@@ -59,11 +67,20 @@ export interface EnrichedLeg {
   isExotic: boolean;
   tier: string;
   redReason?: string;
+  fireStreak: number;
+  lossStreak: number;
+  hasFireStreak: boolean;
+  hasLossStreak: boolean;
+  isDoubleChance: boolean;
+  emojis1?: string[];
+  emojis2?: string[];
 }
 
 export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
   bets,
   supabaseFavorites,
+  teamForms,
+  teamRawMatches,
 }) => {
   // Filtros de visualização
   const [selectedStatus, setSelectedStatus] = useState<'all' | 'red' | 'green' | 'pending'>('all');
@@ -72,6 +89,10 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [activeAnalysisView, setActiveAnalysisView] = useState<'geral' | 'ligas' | 'times'>('geral');
   const [copied, setCopied] = useState<boolean>(false);
+
+  // Novos filtros por Método (Foguinhos e Derrotas) e Mercado (Dupla Chance)
+  const [selectedMethod, setSelectedMethod] = useState<'all' | 'any_fire' | 'fire_1' | 'fire_2' | 'fire_3_plus' | 'loss'>('all');
+  const [selectedMarket, setSelectedMarket] = useState<'all' | 'double_chance' | 'over_1_5' | 'winner'>('all');
 
   // Estados de Recolher/Expandir e Visualização Detalhada
   const [isExplorarExpanded, setIsExplorarExpanded] = useState<boolean>(true);
@@ -82,6 +103,10 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
   // 1. Extração e Enriquecimento de TODOS os confrontos (pernas) de dentro de todos os bilhetes
   const allConfrontos = useMemo<EnrichedLeg[]>(() => {
     const list: EnrichedLeg[] = [];
+    const allFavList =
+      supabaseFavorites && supabaseFavorites.length > 0
+        ? supabaseFavorites
+        : USER_FAVORITE_CLUBS_DATA;
 
     bets.forEach((bet) => {
       const legs = bet.legs || [];
@@ -97,6 +122,26 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
           const legStatus: BetLegStatus =
             bet.status === 'Ganha' ? 'green' : bet.status === 'Perdida' ? 'red' : 'pending';
 
+          const emojis1 = getOrComputeTeamEmojis(t1, undefined, teamForms, undefined, allFavList);
+          const emojis2 = getOrComputeTeamEmojis(t2, undefined, teamForms, undefined, allFavList);
+          const streakFire1 = getEndingFireStreak(emojis1);
+          const streakLoss1 = getEndingLossStreak(emojis1);
+          const streakFire2 = getEndingFireStreak(emojis2);
+          const streakLoss2 = getEndingLossStreak(emojis2);
+          const fireStreak = Math.max(streakFire1, streakFire2);
+          const lossStreak = Math.max(streakLoss1, streakLoss2);
+
+          const isDoubleChance = /dupla|x1|x2/i.test(bet.title || '') || /dupla|x1|x2/i.test(rg);
+
+          let redReason = '';
+          if (legStatus === 'red') {
+            if (isDoubleChance) {
+              redReason = 'Resultado não satisfez a Dupla Chance';
+            } else {
+              redReason = 'Linha de Mais de 1.5 não satisfeita';
+            }
+          }
+
           list.push({
             id: `${bet.id}-virtual-${idx}`,
             betId: bet.id,
@@ -108,8 +153,8 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
             matchTitle: `${t1} x ${t2}`,
             team1: t1,
             team2: t2,
-            market: 'OVER_1_5',
-            marketLabel: 'Mais de 1.5 gols',
+            market: isDoubleChance ? 'DC_1X' : 'OVER_1_5',
+            marketLabel: isDoubleChance ? 'Dupla Chance' : 'Mais de 1.5 gols',
             status: legStatus,
             score: null,
             settledScore: null,
@@ -118,6 +163,14 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
             country: resolved.country,
             isExotic: resolved.isExotic,
             tier: resolved.tier,
+            redReason,
+            fireStreak,
+            lossStreak,
+            hasFireStreak: fireStreak >= 1,
+            hasLossStreak: lossStreak >= 1,
+            isDoubleChance,
+            emojis1,
+            emojis2,
           });
         });
         return;
@@ -152,10 +205,42 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
           totalGoals = Number(score[0]) + Number(score[1]);
         }
 
-        // Diagnóstico de motivo para os REDs
+        // Identificação de Dupla Chance
+        const isDoubleChance =
+          leg.market === 'DC_1X' ||
+          leg.market === 'DC_X1' ||
+          leg.market === 'DC_X2' ||
+          leg.market === 'DC_12' ||
+          (typeof leg.market === 'string' && leg.market.startsWith('DC_')) ||
+          (typeof leg.marketLabel === 'string' && /dupla|x1|x2|ou empate/i.test(leg.marketLabel)) ||
+          (/dupla|x1|x2/i.test(leg.matchTitle || ''));
+
+        // Cálculo de Método (Foguinhos e Derrotas)
+        const emojis1 = getOrComputeTeamEmojis(t1, leg.team1Id, teamForms, undefined, allFavList);
+        const emojis2 = getOrComputeTeamEmojis(t2, leg.team2Id, teamForms, undefined, allFavList);
+        const streakFire1 = getEndingFireStreak(emojis1);
+        const streakLoss1 = getEndingLossStreak(emojis1);
+        const streakFire2 = getEndingFireStreak(emojis2);
+        const streakLoss2 = getEndingLossStreak(emojis2);
+        const fireStreak = Math.max(streakFire1, streakFire2);
+        const lossStreak = Math.max(streakLoss1, streakLoss2);
+
+        // Diagnóstico detalhado de motivo para os REDs
         let redReason = '';
         if (leg.status === 'red') {
-          if (totalGoals === 1) {
+          if (isDoubleChance) {
+            if (leg.market === 'DC_1X' || leg.market === 'DC_X1' || /x1/i.test(leg.marketLabel || '')) {
+              redReason = `Visitante venceu (${score ? `${score[0]}x${score[1]}` : ''} - Dupla Chance Mandante ou Empate perdida)`;
+            } else if (leg.market === 'DC_X2' || /x2/i.test(leg.marketLabel || '')) {
+              redReason = `Mandante venceu (${score ? `${score[0]}x${score[1]}` : ''} - Dupla Chance Visitante ou Empate perdida)`;
+            } else {
+              redReason = 'Resultado não satisfez a Dupla Chance';
+            }
+          } else if (leg.market === 'HOME_WIN') {
+            redReason = `Mandante não venceu (${score ? `${score[0]}x${score[1]}` : ''} em Vitória da Casa)`;
+          } else if (leg.market === 'AWAY_WIN') {
+            redReason = `Visitante não venceu (${score ? `${score[0]}x${score[1]}` : ''} em Vitória do Visitante)`;
+          } else if (totalGoals === 1) {
             redReason = 'Faltou 1 gol (terminou 1x0 ou 0x1 em Mais de 1.5)';
           } else if (totalGoals === 0) {
             redReason = 'Jogo sem gols (terminou 0x0 em Mais de 1.5)';
@@ -180,8 +265,8 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
           matchTitle: leg.matchTitle || `${t1} x ${t2}`,
           team1: t1,
           team2: t2,
-          market: leg.market || 'OVER_1_5',
-          marketLabel: leg.marketLabel || 'Mais de 1.5 gols',
+          market: leg.market || (isDoubleChance ? 'DC_1X' : 'OVER_1_5'),
+          marketLabel: leg.marketLabel || (isDoubleChance ? 'Dupla Chance' : 'Mais de 1.5 gols'),
           status: leg.status,
           score: leg.score || null,
           settledScore: leg.settledScore || null,
@@ -193,12 +278,19 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
           isExotic: resolved.isExotic,
           tier: resolved.tier,
           redReason,
+          fireStreak,
+          lossStreak,
+          hasFireStreak: fireStreak >= 1,
+          hasLossStreak: lossStreak >= 1,
+          isDoubleChance,
+          emojis1,
+          emojis2,
         });
       });
     });
 
     return list;
-  }, [bets, supabaseFavorites]);
+  }, [bets, supabaseFavorites, teamForms]);
 
   // 2. Estatísticas Consolidadas Globais: Confrontos vs Bilhetes
   const stats = useMemo(() => {
@@ -469,31 +561,48 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
     setFilterTeam(null);
     setSelectedLeague('all');
     setSelectedStatus('all');
+    setSelectedMethod('all');
+    setSelectedMarket('all');
     setSearchQuery('');
   };
 
-  // Confrontos correspondentes aos filtros de Time / Liga / Busca (antes do filtro de Status)
+  // Helper para verificar se um confronto corresponde ao filtro de time
+  const matchTeamFilter = (c: EnrichedLeg, teamName: string) => {
+    const normFilter = normalizeTeamName(teamName);
+    const norm1 = normalizeTeamName(c.team1);
+    const norm2 = normalizeTeamName(c.team2);
+    const normTitle = normalizeTeamName(c.matchTitle);
+    return (
+      norm1 === normFilter ||
+      norm2 === normFilter ||
+      norm1.includes(normFilter) ||
+      norm2.includes(normFilter) ||
+      normFilter.includes(norm1) ||
+      normFilter.includes(norm2) ||
+      normTitle.includes(normFilter)
+    );
+  };
+
+  // Confrontos correspondentes aos filtros de Time / Liga / Busca / Método / Mercado (antes do filtro de Status)
   const preStatusMatches = useMemo(() => {
     return allConfrontos.filter((c) => {
       // Filtro de Clube específico (com normalização inteligente)
-      if (filterTeam) {
-        const normFilter = normalizeTeamName(filterTeam);
-        const norm1 = normalizeTeamName(c.team1);
-        const norm2 = normalizeTeamName(c.team2);
-        const normTitle = normalizeTeamName(c.matchTitle);
-        const matchesThisTeam =
-          norm1 === normFilter ||
-          norm2 === normFilter ||
-          norm1.includes(normFilter) ||
-          norm2.includes(normFilter) ||
-          normFilter.includes(norm1) ||
-          normFilter.includes(norm2) ||
-          normTitle.includes(normFilter);
-        if (!matchesThisTeam) return false;
-      }
+      if (filterTeam && !matchTeamFilter(c, filterTeam)) return false;
 
       // Filtro de Liga
       if (selectedLeague !== 'all' && c.league !== selectedLeague) return false;
+
+      // Filtro de Método (Foguinhos e Derrotas)
+      if (selectedMethod === 'any_fire' && c.fireStreak < 1) return false;
+      if (selectedMethod === 'fire_1' && c.fireStreak !== 1) return false;
+      if (selectedMethod === 'fire_2' && c.fireStreak !== 2) return false;
+      if (selectedMethod === 'fire_3_plus' && c.fireStreak < 3) return false;
+      if (selectedMethod === 'loss' && c.lossStreak < 1) return false;
+
+      // Filtro de Mercado (Dupla Chance, Over 1.5, Vitória Simples)
+      if (selectedMarket === 'double_chance' && !c.isDoubleChance) return false;
+      if (selectedMarket === 'over_1_5' && !(c.market === 'OVER_1_5' || /mais de 1\.5/i.test(c.marketLabel))) return false;
+      if (selectedMarket === 'winner' && !(c.market === 'HOME_WIN' || c.market === 'AWAY_WIN' || /vitória/i.test(c.marketLabel))) return false;
 
       // Filtro de Busca manual
       if (searchQuery.trim()) {
@@ -503,12 +612,55 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
         const inTeam2 = c.team2.toLowerCase().includes(query);
         const inLeague = c.league.toLowerCase().includes(query);
         const inCountry = c.country.toLowerCase().includes(query);
-        if (!inTitle && !inTeam1 && !inTeam2 && !inLeague && !inCountry) return false;
+        const inMarket = c.marketLabel.toLowerCase().includes(query);
+        if (!inTitle && !inTeam1 && !inTeam2 && !inLeague && !inCountry && !inMarket) return false;
       }
 
       return true;
     });
-  }, [allConfrontos, filterTeam, selectedLeague, searchQuery]);
+  }, [allConfrontos, filterTeam, selectedLeague, searchQuery, selectedMethod, selectedMarket]);
+
+  // Contagens dinâmicas por Método para exibir nos botões de filtro
+  const methodCounts = useMemo(() => {
+    const base = allConfrontos.filter((c) => {
+      if (filterTeam && !matchTeamFilter(c, filterTeam)) return false;
+      if (selectedLeague !== 'all' && c.league !== selectedLeague) return false;
+      if (selectedMarket === 'double_chance' && !c.isDoubleChance) return false;
+      if (selectedMarket === 'over_1_5' && !(c.market === 'OVER_1_5' || /mais de 1\.5/i.test(c.marketLabel))) return false;
+      if (selectedMarket === 'winner' && !(c.market === 'HOME_WIN' || c.market === 'AWAY_WIN' || /vitória/i.test(c.marketLabel))) return false;
+      return true;
+    });
+
+    return {
+      all: base.length,
+      anyFire: base.filter((c) => c.fireStreak >= 1).length,
+      fire1: base.filter((c) => c.fireStreak === 1).length,
+      fire2: base.filter((c) => c.fireStreak === 2).length,
+      fire3Plus: base.filter((c) => c.fireStreak >= 3).length,
+      loss: base.filter((c) => c.lossStreak >= 1).length,
+    };
+  }, [allConfrontos, filterTeam, selectedLeague, selectedMarket]);
+
+  // Contagens dinâmicas por Mercado para exibir nos botões de filtro
+  const marketCounts = useMemo(() => {
+    const base = allConfrontos.filter((c) => {
+      if (filterTeam && !matchTeamFilter(c, filterTeam)) return false;
+      if (selectedLeague !== 'all' && c.league !== selectedLeague) return false;
+      if (selectedMethod === 'any_fire' && c.fireStreak < 1) return false;
+      if (selectedMethod === 'fire_1' && c.fireStreak !== 1) return false;
+      if (selectedMethod === 'fire_2' && c.fireStreak !== 2) return false;
+      if (selectedMethod === 'fire_3_plus' && c.fireStreak < 3) return false;
+      if (selectedMethod === 'loss' && c.lossStreak < 1) return false;
+      return true;
+    });
+
+    return {
+      all: base.length,
+      doubleChance: base.filter((c) => c.isDoubleChance).length,
+      over15: base.filter((c) => c.market === 'OVER_1_5' || /mais de 1\.5/i.test(c.marketLabel)).length,
+      winner: base.filter((c) => c.market === 'HOME_WIN' || c.market === 'AWAY_WIN' || /vitória/i.test(c.marketLabel)).length,
+    };
+  }, [allConfrontos, filterTeam, selectedLeague, selectedMethod]);
 
   const preStatusGreens = useMemo(
     () => preStatusMatches.filter((c) => c.status === 'green').length,
@@ -1225,8 +1377,8 @@ ${topTeamsText || '  Nenhum clube com Red'}
                   </span>
                 </div>
 
-            {/* Banner de Filtro Ativo quando filtrado por Time, Liga ou Busca */}
-            {(filterTeam || selectedLeague !== 'all' || searchQuery.trim()) && (
+            {/* Banner de Filtros Ativos quando filtrado por Time, Liga, Método, Mercado ou Busca */}
+            {(filterTeam || selectedLeague !== 'all' || selectedMethod !== 'all' || selectedMarket !== 'all' || searchQuery.trim()) && (
               <div className="p-3 sm:p-3.5 rounded-xl bg-[#1a1728] border border-indigo-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-sm">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[11px] font-black text-indigo-300 uppercase tracking-wide flex items-center gap-1.5">
@@ -1237,7 +1389,7 @@ ${topTeamsText || '  Nenhum clube com Red'}
                     <span className="px-2.5 py-1 rounded-lg bg-indigo-500/20 text-white font-black text-xs border border-indigo-400/40 flex items-center gap-1.5">
                       <span>Clube: <strong>{filterTeam}</strong></span>
                       <span className="text-[10px] text-zinc-300 bg-black/40 px-1.5 py-0.5 rounded font-bold">
-                        {preStatusMatches.length} jogos ({preStatusGreens} Greens / {preStatusReds} Reds)
+                        {preStatusMatches.length} jogos ({preStatusGreens}G / {preStatusReds}R)
                       </span>
                       <button
                         onClick={() => setFilterTeam(null)}
@@ -1263,6 +1415,58 @@ ${topTeamsText || '  Nenhum clube com Red'}
                       </button>
                     </span>
                   )}
+                  {selectedMethod !== 'all' && (
+                    <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 font-black text-xs border border-amber-400/40 flex items-center gap-1.5">
+                      <span>
+                        Método:{' '}
+                        <strong>
+                          {selectedMethod === 'any_fire'
+                            ? 'Foguinho (Geral)'
+                            : selectedMethod === 'fire_1'
+                            ? '1 Foguinho (1 🔥)'
+                            : selectedMethod === 'fire_2'
+                            ? '2 Foguinhos (2 🔥)'
+                            : selectedMethod === 'fire_3_plus'
+                            ? '3+ Foguinhos (3+ 🔥)'
+                            : 'Derrota Recente (🔻)'}
+                        </strong>
+                      </span>
+                      <span className="text-[10px] text-zinc-300 bg-black/40 px-1.5 py-0.5 rounded font-bold">
+                        {preStatusMatches.length} jogos ({preStatusGreens}G / {preStatusReds}R)
+                      </span>
+                      <button
+                        onClick={() => setSelectedMethod('all')}
+                        className="text-zinc-400 hover:text-white ml-1 font-bold cursor-pointer"
+                        title="Remover filtro de método"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  )}
+                  {selectedMarket !== 'all' && (
+                    <span className="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 font-black text-xs border border-purple-400/40 flex items-center gap-1.5">
+                      <span>
+                        Mercado:{' '}
+                        <strong>
+                          {selectedMarket === 'double_chance'
+                            ? 'Dupla Chance (X1 / X2)'
+                            : selectedMarket === 'over_1_5'
+                            ? 'Mais de 1.5 gols'
+                            : 'Vitória Simples'}
+                        </strong>
+                      </span>
+                      <span className="text-[10px] text-zinc-300 bg-black/40 px-1.5 py-0.5 rounded font-bold">
+                        {preStatusMatches.length} jogos ({preStatusGreens}G / {preStatusReds}R)
+                      </span>
+                      <button
+                        onClick={() => setSelectedMarket('all')}
+                        className="text-zinc-400 hover:text-white ml-1 font-bold cursor-pointer"
+                        title="Remover filtro de mercado"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  )}
                   {searchQuery && (
                     <span className="px-2.5 py-1 rounded-lg bg-[#22222a] text-zinc-300 text-xs border border-zinc-700 flex items-center gap-1.5">
                       <span>Busca: "{searchQuery}"</span>
@@ -1279,72 +1483,220 @@ ${topTeamsText || '  Nenhum clube com Red'}
                   onClick={handleClearFilters}
                   className="text-xs text-rose-400 hover:text-rose-300 font-bold underline cursor-pointer self-start sm:self-auto shrink-0 py-0.5"
                 >
-                  Limpar filtros (Ver todos os {stats.totalConfrontos} jogos)
+                  Limpar todos os filtros ({stats.totalConfrontos} jogos)
                 </button>
               </div>
             )}
 
-            {/* Barra de Filtros: Status Buttons com scroll suave no Mobile */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
-              <button
-                onClick={() => setSelectedStatus('all')}
-                className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                  selectedStatus === 'all'
-                    ? 'bg-white text-black border-white shadow-sm'
-                    : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                }`}
-              >
-                <span>Todos ({preStatusMatches.length})</span>
-              </button>
+            {/* Três Linhas de Filtros Responsivas: Status, Método (Foguinhos) e Mercado (Dupla Chance) */}
+            <div className="space-y-2">
+              {/* 1. Status Filter */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
+                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider shrink-0 mr-0.5 flex items-center gap-1">
+                  <Layers className="w-3 h-3 text-zinc-400" />
+                  Status:
+                </span>
 
-              <button
-                onClick={() => setSelectedStatus('red')}
-                className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                  selectedStatus === 'red'
-                    ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
-                    : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                }`}
-              >
-                <XCircle className="w-3.5 h-3.5" />
-                <span>Apenas REDs ({preStatusReds})</span>
-              </button>
-
-              <button
-                onClick={() => setSelectedStatus('green')}
-                className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                  selectedStatus === 'green'
-                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
-                    : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                }`}
-              >
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>Apenas GREENs ({preStatusGreens})</span>
-              </button>
-
-              {preStatusPending > 0 && (
                 <button
-                  onClick={() => setSelectedStatus('pending')}
+                  onClick={() => setSelectedStatus('all')}
                   className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                    selectedStatus === 'pending'
-                      ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                    selectedStatus === 'all'
+                      ? 'bg-white text-black border-white shadow-sm'
                       : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
                   }`}
                 >
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Pendentes ({preStatusPending})</span>
+                  <span>Todos ({preStatusMatches.length})</span>
                 </button>
-              )}
+
+                <button
+                  onClick={() => setSelectedStatus('red')}
+                  className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
+                    selectedStatus === 'red'
+                      ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
+                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
+                  }`}
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  <span>Apenas REDs ({preStatusReds})</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedStatus('green')}
+                  className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
+                    selectedStatus === 'green'
+                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
+                  }`}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Apenas GREENs ({preStatusGreens})</span>
+                </button>
+
+                {preStatusPending > 0 && (
+                  <button
+                    onClick={() => setSelectedStatus('pending')}
+                    className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
+                      selectedStatus === 'pending'
+                        ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
+                        : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>Pendentes ({preStatusPending})</span>
+                  </button>
+                )}
+              </div>
+
+              {/* 2. Método / Foguinhos Filter */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
+                <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider shrink-0 mr-0.5 flex items-center gap-1">
+                  <Flame className="w-3 h-3 text-amber-400" />
+                  Método:
+                </span>
+
+                <button
+                  onClick={() => setSelectedMethod('all')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                    selectedMethod === 'all'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 font-black'
+                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
+                  }`}
+                >
+                  Todos ({methodCounts.all})
+                </button>
+
+                <button
+                  onClick={() => setSelectedMethod('any_fire')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMethod === 'any_fire'
+                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
+                      : 'bg-[#18181e] text-amber-400 border-[#2a2a34] hover:border-amber-500/40'
+                  }`}
+                  title="Partidas de times com sequência de Foguinho (🔥)"
+                >
+                  <span>🔥 Foguinho</span>
+                  <span className="text-[10px] opacity-80 font-bold">({methodCounts.anyFire})</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedMethod('fire_1')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMethod === 'fire_1'
+                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
+                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-amber-500/40'
+                  }`}
+                  title="Sequência de exatamente 1 Foguinho (1 🔥)"
+                >
+                  <span>1 🔥</span>
+                  <span className="text-[10px] text-zinc-400 font-bold">({methodCounts.fire1})</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedMethod('fire_2')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMethod === 'fire_2'
+                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
+                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-amber-500/40'
+                  }`}
+                  title="Sequência de exatamente 2 Foguinhos (2 🔥)"
+                >
+                  <span>2 🔥</span>
+                  <span className="text-[10px] text-zinc-400 font-bold">({methodCounts.fire2})</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedMethod('fire_3_plus')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMethod === 'fire_3_plus'
+                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
+                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-amber-500/40'
+                  }`}
+                  title="Sequência de 3 ou mais Foguinhos (3+ 🔥)"
+                >
+                  <span>3+ 🔥</span>
+                  <span className="text-[10px] text-zinc-400 font-bold">({methodCounts.fire3Plus})</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedMethod('loss')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMethod === 'loss'
+                      ? 'bg-rose-600 text-white border-rose-500 font-black shadow-xs'
+                      : 'bg-[#18181e] text-rose-400 border-[#2a2a34] hover:border-rose-500/40'
+                  }`}
+                  title="Partidas após derrota do time favorito (🔻 Red recente)"
+                >
+                  <span>🔻 Derrota</span>
+                  <span className="text-[10px] opacity-80 font-bold">({methodCounts.loss})</span>
+                </button>
+              </div>
+
+              {/* 3. Mercado Filter (Dupla Chance) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
+                <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider shrink-0 mr-0.5 flex items-center gap-1">
+                  <Target className="w-3 h-3 text-purple-400" />
+                  Mercado:
+                </span>
+
+                <button
+                  onClick={() => setSelectedMarket('all')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                    selectedMarket === 'all'
+                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/60 font-black'
+                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
+                  }`}
+                >
+                  Todos ({marketCounts.all})
+                </button>
+
+                <button
+                  onClick={() => setSelectedMarket('double_chance')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMarket === 'double_chance'
+                      ? 'bg-purple-600 text-white border-purple-400 font-black shadow-xs'
+                      : 'bg-[#18181e] text-purple-300 border-[#2a2a34] hover:border-purple-500/50'
+                  }`}
+                  title="Filtrar por Dupla Chance (X1, X2 / Dupla Hipótese)"
+                >
+                  <span>🎲 Dupla Chance (X1/X2)</span>
+                  <span className="text-[10px] font-bold opacity-80">({marketCounts.doubleChance})</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedMarket('over_1_5')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMarket === 'over_1_5'
+                      ? 'bg-sky-600 text-white border-sky-400 font-black shadow-xs'
+                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-sky-500/40'
+                  }`}
+                >
+                  <span>⚽ Mais de 1.5</span>
+                  <span className="text-[10px] text-zinc-400 font-bold">({marketCounts.over15})</span>
+                </button>
+
+                <button
+                  onClick={() => setSelectedMarket('winner')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                    selectedMarket === 'winner'
+                      ? 'bg-emerald-600 text-white border-emerald-400 font-black shadow-xs'
+                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-emerald-500/40'
+                  }`}
+                >
+                  <span>🏆 Vitória 1X2</span>
+                  <span className="text-[10px] text-zinc-400 font-bold">({marketCounts.winner})</span>
+                </button>
+              </div>
             </div>
 
             {/* Linha de Busca & Filtro de Liga Ativa */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
               <div className="relative flex-1">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Buscar time, jogo ou liga..."
+                  placeholder="Buscar time, jogo, liga ou mercado..."
                   className="w-full bg-[#18181e] border border-[#2a2a34] focus:border-indigo-500 text-white text-xs pl-8 pr-7 py-2 rounded-xl outline-none transition-all placeholder:text-zinc-600"
                 />
                 {searchQuery && (
@@ -1424,14 +1776,39 @@ ${topTeamsText || '  Nenhum clube com Red'}
                       </div>
                     </div>
 
-                    {/* Middle Row: Partida & Placar Grande */}
+                    {/* Middle Row: Partida, Placar Grande & Badges de Método / Mercado */}
                     <div className="flex items-center justify-between gap-2 pt-0.5">
                       <div className="min-w-0 flex-1">
                         <div className="font-black text-white text-xs leading-tight">
                           {leg.matchTitle}
                         </div>
-                        <div className="text-[10px] text-zinc-500 mt-0.5">
-                          {leg.country} • {leg.marketLabel}
+                        <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-zinc-500 mt-1">
+                          <span>{leg.country}</span>
+                          <span>•</span>
+                          {/* Badge de Mercado */}
+                          {leg.isDoubleChance ? (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                              🎲 {leg.market === 'DC_1X' ? 'Dupla: X1 (Casa/Empate)' : leg.market === 'DC_X2' ? 'Dupla: X2 (Fora/Empate)' : 'Dupla Chance'}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-400 font-medium">
+                              {leg.marketLabel}
+                            </span>
+                          )}
+
+                          {/* Badge de Método (Foguinho ou Derrota) */}
+                          {leg.fireStreak > 0 && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-0.5">
+                              <span>🔥</span>
+                              <span>{leg.fireStreak}x Foguinho</span>
+                            </span>
+                          )}
+                          {leg.lossStreak > 0 && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-0.5">
+                              <span>🔻</span>
+                              <span>{leg.lossStreak}x Derrota</span>
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -1462,7 +1839,9 @@ ${topTeamsText || '  Nenhum clube com Red'}
                           </span>
                         ) : isGreen ? (
                           <span className="font-medium text-emerald-400/90 block leading-tight">
-                            Linha batida ({leg.totalGoals} gols no jogo)
+                            {leg.isDoubleChance
+                              ? `Dupla Chance confirmada (${leg.score?.ft ? `${leg.score.ft[0]}x${leg.score.ft[1]}` : 'Green'})`
+                              : `Linha batida (${leg.totalGoals} gols no jogo)`}
                           </span>
                         ) : (
                           <span className="text-zinc-500 block">Aguardando resultado</span>
@@ -1483,13 +1862,14 @@ ${topTeamsText || '  Nenhum clube com Red'}
           {/* VISÃO DESKTOP / TABLET: TABELA COMPLETA */}
           {/* ============================================================== */}
           <div className="hidden sm:block overflow-x-auto -mx-4 sm:mx-0">
-            <table className="w-full text-left border-collapse min-w-[640px]">
+            <table className="w-full text-left border-collapse min-w-[700px]">
               <thead>
                 <tr className="border-b border-[#24242a] text-[10px] font-black text-zinc-500 uppercase tracking-wider bg-[#18181e]/80">
                   <th className="py-2.5 px-3">Data</th>
                   <th className="py-2.5 px-3">Confronto</th>
                   <th className="py-2.5 px-3">Liga / País</th>
                   <th className="py-2.5 px-3">Mercado</th>
+                  <th className="py-2.5 px-3">Método</th>
                   <th className="py-2.5 px-3 text-center">Placar Real</th>
                   <th className="py-2.5 px-3 text-center">Resultado</th>
                   <th className="py-2.5 px-3">Motivo / Análise</th>
@@ -1499,7 +1879,7 @@ ${topTeamsText || '  Nenhum clube com Red'}
               <tbody className="divide-y divide-[#1e1e24] text-xs">
                 {filteredConfrontos.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="py-8 text-center text-zinc-500 text-xs">
+                    <td colSpan={9} className="py-8 text-center text-zinc-500 text-xs">
                       Nenhum confronto encontrado com os filtros selecionados.
                     </td>
                   </tr>
@@ -1547,9 +1927,32 @@ ${topTeamsText || '  Nenhum clube com Red'}
 
                         {/* Mercado */}
                         <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#22222c] border border-[#2e2e3a] text-zinc-300">
-                            {leg.marketLabel}
-                          </span>
+                          {leg.isDoubleChance ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black bg-purple-500/20 border border-purple-500/40 text-purple-300">
+                              🎲 {leg.market === 'DC_1X' ? 'Dupla: X1' : leg.market === 'DC_X2' ? 'Dupla: X2' : 'Dupla Chance'}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#22222c] border border-[#2e2e3a] text-zinc-300">
+                              {leg.marketLabel}
+                            </span>
+                          )}
+                        </td>
+
+                        {/* Método */}
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          {leg.fireStreak > 0 ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-500/20 border border-amber-500/40 text-amber-300 flex items-center gap-1 w-fit">
+                              <span>🔥</span>
+                              <span>{leg.fireStreak}x Foguinho</span>
+                            </span>
+                          ) : leg.lossStreak > 0 ? (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black bg-rose-500/20 border border-rose-500/40 text-rose-300 flex items-center gap-1 w-fit">
+                              <span>🔻</span>
+                              <span>{leg.lossStreak}x Derrota</span>
+                            </span>
+                          ) : (
+                            <span className="text-zinc-600 text-[10px]">-</span>
+                          )}
                         </td>
 
                         {/* Placar Real */}
@@ -1599,7 +2002,9 @@ ${topTeamsText || '  Nenhum clube com Red'}
                             </span>
                           ) : isGreen ? (
                             <span className="text-[11px] font-medium text-emerald-400/90 block leading-tight">
-                              Linha batida ({leg.totalGoals} gols no total)
+                              {leg.isDoubleChance
+                                ? `Dupla Chance confirmada (${leg.score?.ft ? `${leg.score.ft[0]}x${leg.score.ft[1]}` : 'Green'})`
+                                : `Linha batida (${leg.totalGoals} gols no total)`}
                             </span>
                           ) : (
                             <span className="text-[11px] text-zinc-500 block">Aguardando resultado</span>

@@ -571,6 +571,8 @@ export default function App() {
             <RelatorioConfrontos
               bets={balancoData.bets}
               supabaseFavorites={supabaseFavorites}
+              teamForms={favoriteForms}
+              teamRawMatches={teamRawMatches}
             />
           </div>
         ) : activeNavTab === 'notificacoes' ? (
