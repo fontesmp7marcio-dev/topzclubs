@@ -27,6 +27,12 @@ export function isFemaleOrWomensMatch(leagueName?: string, team1?: string, team2
       lower.includes('frauen') ||
       lower.includes('(w)') ||
       lower.includes('(fem)') ||
+      lower.includes('(f)') ||
+      lower.includes('mulheres') ||
+      lower.includes('ladies') ||
+      lower.includes('femenil') ||
+      lower.includes('femenino') ||
+      lower.includes('feminina') ||
       /\b(wfc|wfd|fem|women|womens)\b/i.test(lower)
     ) {
       return true;
@@ -34,7 +40,7 @@ export function isFemaleOrWomensMatch(leagueName?: string, team1?: string, team2
 
     // 2. Youth / Sub / U-XX categories (including Dutch "Jong")
     if (
-      /\b(sub[- ]?\d{1,2}|u[- ]?\d{1,2})\b/i.test(lower) ||
+      /\b(sub[- ]?\d{1,2}|u[- ]?\d{1,2}|sub\d{1,2}|u\d{1,2})\b/i.test(lower) ||
       /\b(youth|juniores|júnior|junior|juvenil|reserves|reserve|reservas|reserva|jong)\b/i.test(lower)
     ) {
       return true;
@@ -46,6 +52,21 @@ export function isFemaleOrWomensMatch(leagueName?: string, team1?: string, team2
       /\b(cf ii|cf 2|fc ii|fc 2|sc ii|sc 2)\b/i.test(lower) ||
       /\s+(ii|2|b)($|\s|\)|\()/i.test(lower) ||
       /\b(ii|2)\b$/i.test(lower)
+    ) {
+      return true;
+    }
+
+    // 4. Friendly / Amistoso / Exhibition matches
+    if (
+      lower.includes('friendly') ||
+      lower.includes('friendlies') ||
+      lower.includes('amistoso') ||
+      lower.includes('amistosos') ||
+      lower.includes('amigavel') ||
+      lower.includes('amigaveis') ||
+      lower.includes('amigável') ||
+      lower.includes('amigáveis') ||
+      lower.includes('exhibition')
     ) {
       return true;
     }

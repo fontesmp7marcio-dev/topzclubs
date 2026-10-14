@@ -27,6 +27,12 @@ function isFemaleMatchInScraper(leagueName?: string, team1?: string, team2?: str
       lower.includes('frauen') ||
       lower.includes('(w)') ||
       lower.includes('(fem)') ||
+      lower.includes('(f)') ||
+      lower.includes('mulheres') ||
+      lower.includes('ladies') ||
+      lower.includes('femenil') ||
+      lower.includes('femenino') ||
+      lower.includes('feminina') ||
       /\b(wfc|wfd|fem|women|womens)\b/i.test(lower)
     ) {
       return true;
@@ -34,7 +40,7 @@ function isFemaleMatchInScraper(leagueName?: string, team1?: string, team2?: str
 
     // 2. Youth / Sub / U-XX categories (including Dutch "Jong")
     if (
-      /\b(sub[- ]?\d{1,2}|u[- ]?\d{1,2})\b/i.test(lower) ||
+      /\b(sub[- ]?\d{1,2}|u[- ]?\d{1,2}|sub\d{1,2}|u\d{1,2})\b/i.test(lower) ||
       /\b(youth|juniores|júnior|junior|juvenil|reserves|reserve|reservas|reserva|jong)\b/i.test(lower)
     ) {
       return true;
@@ -46,6 +52,21 @@ function isFemaleMatchInScraper(leagueName?: string, team1?: string, team2?: str
       /\b(cf ii|cf 2|fc ii|fc 2|sc ii|sc 2)\b/i.test(lower) ||
       /\s+(ii|2|b)($|\s|\)|\()/i.test(lower) ||
       /\b(ii|2)\b$/i.test(lower)
+    ) {
+      return true;
+    }
+
+    // 4. Friendly / Amistoso / Exhibition matches
+    if (
+      lower.includes('friendly') ||
+      lower.includes('friendlies') ||
+      lower.includes('amistoso') ||
+      lower.includes('amistosos') ||
+      lower.includes('amigavel') ||
+      lower.includes('amigaveis') ||
+      lower.includes('amigável') ||
+      lower.includes('amigáveis') ||
+      lower.includes('exhibition')
     ) {
       return true;
     }
@@ -702,10 +723,11 @@ function parseFixturesPayload(teamData: any, teamId: number, teamNameHint?: stri
 
       // Compute result (V/E/D) relative to requested team
       let result: 'V' | 'E' | 'D' | undefined = undefined;
-      const isTeamHome =
+      const isTeamHome = Boolean(
         (homeId && teamId && Number(homeId) === Number(teamId)) ||
         (homeTeam && teamName && homeTeam.toLowerCase().trim() === teamName.toLowerCase().trim()) ||
-        (homeTeam && teamNameHint && homeTeam.toLowerCase().trim() === teamNameHint.toLowerCase().trim());
+        (homeTeam && teamNameHint && homeTeam.toLowerCase().trim() === teamNameHint.toLowerCase().trim())
+      );
 
       if (isFinished && typeof homeScore === 'number' && typeof awayScore === 'number') {
         if (homeScore === awayScore) {

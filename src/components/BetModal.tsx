@@ -24,6 +24,7 @@ import {
 import { TeamCrest } from './TeamCrest';
 import { MatchupPill } from './MatchupPill';
 import { isMatchInFavorites } from '../data/curatedSchedule';
+import { isFemaleOrWomensMatch } from '../utils/femaleFilter';
 import { isTeamNameInFavorites, normalizeTeamName, USER_FAVORITE_CLUBS_DATA } from '../data/favoriteClubs';
 import {
   filterTeamPastMatches,
@@ -85,13 +86,15 @@ export const BetModal: React.FC<BetModalProps> = ({
   const [internalRawMatches, setInternalRawMatches] = useState<Record<number, MatchItem[]>>({});
   const [showAllDayMatches, setShowAllDayMatches] = useState<boolean>(false);
   const [quickFilter, setQuickFilter] = useState<'foguinho' | 'derrota' | null>(null);
+  const [fireCountFilter, setFireCountFilter] = useState<number>(0); // 0 = todos, 2 = 2 foguinhos, 3 = 3 foguinhos
   const [oddsAvailability, setOddsAvailability] = useState<Record<string | number, { bet365: boolean; betano: boolean }>>({});
   const fetchedTeamsRef = React.useRef<Set<number>>(new Set());
 
-  // Reset showAllDayMatches and quickFilter when date changes or modal opens
+  // Reset showAllDayMatches, quickFilter and fireCountFilter when date changes or modal opens
   useEffect(() => {
     setShowAllDayMatches(false);
     setQuickFilter(null);
+    setFireCountFilter(0);
   }, [date, isOpen]);
 
   // Load user favorites from Supabase API (or fallback to master list) when modal opens
@@ -286,7 +289,10 @@ export const BetModal: React.FC<BetModalProps> = ({
       .then((data) => {
         if (isCancelled) return;
         if (data && Array.isArray(data.matches)) {
-          setDayMatches(data.matches);
+          const clean = data.matches.filter(
+            (m: any) => !isFemaleOrWomensMatch(m.leagueName, m.team1, m.team2)
+          );
+          setDayMatches(clean);
         } else {
           setDayMatches([]);
         }
@@ -359,6 +365,7 @@ export const BetModal: React.FC<BetModalProps> = ({
   useEffect(() => {
     if (!isOpen || dayMatches.length === 0) return;
 
+    const teamsToFetch: { id: number; name: string }[] = [];
     dayMatches.forEach((m) => {
       const fav1 = findFavoriteClub(m.team1, m.team1Id);
       const fav2 = findFavoriteClub(m.team2, m.team2Id);
@@ -374,18 +381,26 @@ export const BetModal: React.FC<BetModalProps> = ({
         }
 
         fetchedTeamsRef.current.add(fav.id);
-        fetch(`/api/fotmob/team/${fav.id}?name=${encodeURIComponent(fav.name)}`)
-          .then((res) => res.json())
-          .then((data) => {
-            if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
-              setInternalRawMatches((prev) => ({ ...prev, [fav.id]: data.pastMatches }));
-            }
-          })
-          .catch(() => {
-            fetchedTeamsRef.current.delete(fav.id);
-          });
+        teamsToFetch.push({ id: fav.id, name: fav.name });
       });
     });
+
+    if (teamsToFetch.length > 0) {
+      fetch('/api/fotmob/batch-teams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ teams: teamsToFetch }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (data && data.teamsData && Object.keys(data.teamsData).length > 0) {
+            setInternalRawMatches((prev) => ({ ...prev, ...data.teamsData }));
+          }
+        })
+        .catch((err) => {
+          console.warn('Batch fetch error in BetModal:', err);
+        });
+    }
   }, [isOpen, dayMatches, findFavoriteClub, teamForms, combinedRawMatches]);
 
   // Evaluate each day match: check if favorite teams have active fire emoji (🔥 Under 1.5) or defeat emoji (🔻 Derrota) in their last match
@@ -416,7 +431,7 @@ export const BetModal: React.FC<BetModalProps> = ({
       // Rule: Match qualifies if at least one favorite team comes from a foguinho (🔥 Under 1.5) OR a derrota (🔻) in its last match
       const hasFireStreak = (isFav1 && streakFire1 >= 1) || (isFav2 && streakFire2 >= 1);
       const hasLossStreak = (isFav1 && streakLoss1 >= 1) || (isFav2 && streakLoss2 >= 1);
-      const qualifies = hasFireStreak || hasLossStreak;
+      const qualifies = (isFav1 || isFav2) && (hasFireStreak || hasLossStreak);
 
       return {
         match: m,
@@ -505,12 +520,21 @@ export const BetModal: React.FC<BetModalProps> = ({
     return matchesWithStreakInfo
       .filter((item) => {
         if (!item.qualifies) return false;
-        if (quickFilter === 'foguinho') return item.hasFireStreak;
+        if (quickFilter === 'foguinho') {
+          if (!item.hasFireStreak) return false;
+          if (fireCountFilter === 2) {
+            return (item.isFav1 && item.streakFire1 >= 2) || (item.isFav2 && item.streakFire2 >= 2);
+          }
+          if (fireCountFilter === 3) {
+            return (item.isFav1 && item.streakFire1 >= 3) || (item.isFav2 && item.streakFire2 >= 3);
+          }
+          return true;
+        }
         if (quickFilter === 'derrota') return item.hasLossStreak;
         return true;
       })
       .filter((item) => !isMatchAlreadyUsedInOtherBet(item.match));
-  }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet, quickFilter]);
+  }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet, quickFilter, fireCountFilter]);
 
   // Quantidade de jogos ocultados por já estarem em outros bilhetes salvos desta data
   const hiddenMatchesCount = React.useMemo(() => {
@@ -527,7 +551,16 @@ export const BetModal: React.FC<BetModalProps> = ({
           if (!item.qualifies && (quickFilter === 'foguinho' || quickFilter === 'derrota')) {
             return false;
           }
-          if (quickFilter === 'foguinho') return item.hasFireStreak;
+          if (quickFilter === 'foguinho') {
+            if (!item.hasFireStreak) return false;
+            if (fireCountFilter === 2) {
+              return (item.isFav1 && item.streakFire1 >= 2) || (item.isFav2 && item.streakFire2 >= 2);
+            }
+            if (fireCountFilter === 3) {
+              return (item.isFav1 && item.streakFire1 >= 3) || (item.isFav2 && item.streakFire2 >= 3);
+            }
+            return true;
+          }
           if (quickFilter === 'derrota') return item.hasLossStreak;
           return true;
         })
@@ -535,7 +568,7 @@ export const BetModal: React.FC<BetModalProps> = ({
         .slice(0, 40);
     }
     return streakMatches;
-  }, [showAllDayMatches, matchesWithStreakInfo, streakMatches, isMatchAlreadyUsedInOtherBet, quickFilter]);
+  }, [showAllDayMatches, matchesWithStreakInfo, streakMatches, isMatchAlreadyUsedInOtherBet, quickFilter, fireCountFilter]);
 
   // Carrega disponibilidade das casas de apostas (Bet365 / Betano para Total de Gols 1.5)
   useEffect(() => {
@@ -734,33 +767,69 @@ export const BetModal: React.FC<BetModalProps> = ({
                   Jogos dos Favoritos ({date.split('-').reverse().join('/')})
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
-                {/* Filtro Foguinho */}
-                <button
-                  type="button"
-                  onClick={() => setQuickFilter((prev) => (prev === 'foguinho' ? null : 'foguinho'))}
-                  className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-all select-none active:scale-95 cursor-pointer border ${
-                    quickFilter === 'foguinho'
-                      ? 'bg-amber-950/60 text-amber-300 border-amber-500 shadow-sm shadow-amber-500/25'
-                      : 'bg-[#1d1d24] text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:border-zinc-700'
-                  }`}
-                  title="Filtrar por método do Foguinho (🔥 Under 1.5)"
-                >
-                  🔥
-                </button>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {/* Filtro Foguinho com seletor de quantidade de foguinhos */}
+                <div className="flex items-center gap-1 bg-[#1a1a22] p-0.5 rounded-lg border border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuickFilter((prev) => {
+                        if (prev === 'foguinho') {
+                          setFireCountFilter(0);
+                          return null;
+                        }
+                        return 'foguinho';
+                      });
+                    }}
+                    className={`h-7 px-2 rounded-md text-xs font-black flex items-center gap-1 transition-all select-none active:scale-95 cursor-pointer border ${
+                      quickFilter === 'foguinho'
+                        ? 'bg-amber-950/70 text-amber-300 border-amber-500 shadow-sm shadow-amber-500/25'
+                        : 'bg-transparent text-zinc-400 hover:text-zinc-200 border-transparent hover:bg-[#22222b]'
+                    }`}
+                    title="Filtrar por método do Foguinho (🔥 Under 1.5)"
+                  >
+                    <span>🔥</span>
+                    <span className="text-[10px] font-bold">Foguinho</span>
+                  </button>
+
+                  {/* Seletor específico da quantidade de foguinhos (2 ou 3) */}
+                  {quickFilter === 'foguinho' && (
+                    <div className="flex items-center gap-0.5 pl-1 border-l border-zinc-700/60 animate-fade-in">
+                      {[
+                        { label: 'Todos', count: 0 },
+                        { label: '2 🔥', count: 2 },
+                        { label: '3+ 🔥', count: 3 },
+                      ].map((opt) => (
+                        <button
+                          key={opt.count}
+                          type="button"
+                          onClick={() => setFireCountFilter(opt.count)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-all cursor-pointer ${
+                            fireCountFilter === opt.count
+                              ? 'bg-amber-400 text-black shadow-xs'
+                              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {/* Filtro Derrota */}
                 <button
                   type="button"
                   onClick={() => setQuickFilter((prev) => (prev === 'derrota' ? null : 'derrota'))}
-                  className={`w-7 h-7 rounded-lg text-xs font-black flex items-center justify-center transition-all select-none active:scale-95 cursor-pointer border ${
+                  className={`h-7 px-2 rounded-lg text-xs font-black flex items-center gap-1 transition-all select-none active:scale-95 cursor-pointer border ${
                     quickFilter === 'derrota'
                       ? 'bg-rose-950/60 text-rose-300 border-rose-500 shadow-sm shadow-rose-500/25'
                       : 'bg-[#1d1d24] text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:border-zinc-700'
                   }`}
                   title="Filtrar por sequência de Derrota (🔻)"
                 >
-                  🔻
+                  <span>🔻</span>
+                  <span className="text-[10px] font-bold">Derrota</span>
                 </button>
 
                 {hiddenMatchesCount > 0 && (
@@ -805,7 +874,13 @@ export const BetModal: React.FC<BetModalProps> = ({
                 ) : (
                   <div className="flex items-center justify-center gap-2 text-xs font-bold text-zinc-300 py-1">
                     {quickFilter === 'foguinho' ? (
-                      <span>Nenhum clube favorito com método do Foguinho para esta data.</span>
+                      <span>
+                        {fireCountFilter === 2
+                          ? 'Nenhum clube favorito com sequência de 2 foguinhos para esta data.'
+                          : fireCountFilter === 3
+                          ? 'Nenhum clube favorito com sequência de 3 foguinhos para esta data.'
+                          : 'Nenhum clube favorito com método do Foguinho para esta data.'}
+                      </span>
                     ) : quickFilter === 'derrota' ? (
                       <span>Nenhum clube favorito com sequência de Derrota para esta data.</span>
                     ) : (
@@ -1093,7 +1168,7 @@ export const BetModal: React.FC<BetModalProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1.5 border-t border-[#272734]">
                         <div>
                           <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                            Mercado Apostado (3 Opções)
+                            Mercado Apostado (5 Opções)
                           </label>
                           <select
                             value={leg.market || 'OVER_1_5'}

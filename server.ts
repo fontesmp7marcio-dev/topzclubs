@@ -768,6 +768,47 @@ app.get('/api/fotmob/team/:id', async (req, res) => {
   }
 });
 
+// API: Batch Fetch FotMob Teams Fixtures (past matches) for lightning-fast synchronized load
+app.post('/api/fotmob/batch-teams', async (req, res) => {
+  const { teams } = req.body;
+  if (!Array.isArray(teams) || teams.length === 0) {
+    return res.json({ teamsData: {} });
+  }
+
+  const results: Record<string | number, any[]> = {};
+  await Promise.all(
+    teams.slice(0, 35).map(async (t: { id?: number; name?: string }) => {
+      try {
+        let tId = t.id ? Number(t.id) : 0;
+        const nameHint = t.name || '';
+        if ((!tId || tId <= 0) && nameHint) {
+          const searchRes = await searchFotMobTeam(nameHint);
+          if (searchRes?.team?.id) {
+            tId = searchRes.team.id;
+          }
+        }
+        if (tId && tId > 0) {
+          const data = await scrapeFotMobTeamFixtures(tId, 'team', false, nameHint);
+          if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
+            results[tId] = data.pastMatches;
+            if (t.id) results[t.id] = data.pastMatches;
+            if (nameHint) {
+              const norm = nameHint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+              results[norm] = data.pastMatches;
+              const clean = norm.replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '').replace(/\s+/g, ' ').trim();
+              if (clean) results[clean] = data.pastMatches;
+            }
+          }
+        }
+      } catch (err) {
+        // Proceed with remaining teams
+      }
+    })
+  );
+
+  res.json({ teamsData: results });
+});
+
 // API: AI Match Insight & Prediction (Gemini)
 app.post('/api/football/ai-analyze', async (req, res) => {
   const { team1, team2, leagueName, team1Stats, team2Stats, h2hStats } = req.body;

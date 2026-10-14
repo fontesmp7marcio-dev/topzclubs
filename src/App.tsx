@@ -119,7 +119,27 @@ export default function App() {
     autoCheckAndRenewPushSubscription().catch(() => {});
   }, []);
 
-  // Intelligent on-demand fetch: Only fetch real past matches for favorite clubs that are active in currently viewed matches
+  // Proactive prefetch of favorite clubs on app start
+  useEffect(() => {
+    const initialFavs = USER_FAVORITE_CLUBS_DATA.slice(0, 30);
+    fetch('/api/fotmob/batch-teams', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teams: initialFavs }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.teamsData && Object.keys(data.teamsData).length > 0) {
+          setTeamRawMatches((prev) => ({
+            ...prev,
+            ...data.teamsData,
+          }));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Intelligent synchronized fetch: Fetch real past matches for favorite clubs active in currently viewed matches
   useEffect(() => {
     if (!dateMatches || dateMatches.length === 0) return;
 
@@ -179,60 +199,24 @@ export default function App() {
 
     if (activeFavoritesToFetch.length === 0) return;
 
-    // Fetch active teams in concurrent batches of 6 for lightning-fast loading
-    let isCancelled = false;
-    async function loadActiveTeamForms() {
-      for (let i = 0; i < activeFavoritesToFetch.length; i += 6) {
-        if (isCancelled) break;
-        const batch = activeFavoritesToFetch.slice(i, i + 6);
-        await Promise.all(
-          batch.map(async (club) => {
-            const normKey = normalizeTeamName(club.name);
-            try {
-              const res = await fetch(`/api/fotmob/team/${club.id || 0}?name=${encodeURIComponent(club.name)}`);
-              if (res.ok) {
-                const data = await res.json();
-                if (!isCancelled && data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
-                  setTeamRawMatches((prev) => {
-                    const next = { ...prev };
-                    if (club.id) next[club.id] = data.pastMatches;
-                    if (data.teamId) next[data.teamId] = data.pastMatches;
-                    const dictId = getTeamId(club.name) || (data.teamName ? getTeamId(data.teamName) : undefined);
-                    if (dictId) next[dictId] = data.pastMatches;
-                    if (normKey) next[normKey] = data.pastMatches;
-                    const lowReq = club.name.toLowerCase().trim();
-                    if (lowReq) next[lowReq] = data.pastMatches;
-                    if (data.teamName) {
-                      const normRes = normalizeTeamName(data.teamName);
-                      if (normRes) next[normRes] = data.pastMatches;
-                      const lowRes = data.teamName.toLowerCase().trim();
-                      if (lowRes) next[lowRes] = data.pastMatches;
-                    }
-                    return next;
-                  });
-                  return;
-                }
-              }
-              // If not ok or empty matches, clean ref to permit retry
-              if (normKey) fetchedFormsRef.current.delete(normKey);
-              if (club.id) fetchedFormsRef.current.delete(String(club.id));
-            } catch {
-              if (normKey) fetchedFormsRef.current.delete(normKey);
-              if (club.id) fetchedFormsRef.current.delete(String(club.id));
-            }
-          })
-        );
-        // Minimal pause between batches to keep event loop responsive
-        if (i + 6 < activeFavoritesToFetch.length) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+    // Single fast batch request to retrieve official past matches
+    fetch('/api/fotmob/batch-teams', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teams: activeFavoritesToFetch }),
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.teamsData && Object.keys(data.teamsData).length > 0) {
+          setTeamRawMatches((prev) => ({
+            ...prev,
+            ...data.teamsData,
+          }));
         }
-      }
-    }
-
-    loadActiveTeamForms();
-    return () => {
-      isCancelled = true;
-    };
+      })
+      .catch((err) => {
+        console.warn('Batch team forms load error:', err);
+      });
   }, [dateMatches, supabaseFavorites]);
 
   // Synchronized Dynamic Emoji Sequences:
@@ -406,7 +390,10 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         if (data && Array.isArray(data.matches)) {
-          setDateMatches(data.matches);
+          const cleanMatches = data.matches.filter(
+            (m: any) => !isFemaleOrWomensMatch(m.leagueName, m.team1, m.team2)
+          );
+          setDateMatches(cleanMatches);
         }
       }
     } catch (err) {

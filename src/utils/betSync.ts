@@ -33,10 +33,12 @@ export function getMarketMetadata(marketKey: string, team1?: string, team2?: str
 }
 
 /**
- * Returns ONLY the 3 approved selectable markets:
+ * Returns the 5 approved selectable markets:
  * 1. Mais de 1.5 gols
  * 2. Vitória da casa
  * 3. Vitória do visitante
+ * 4. Dupla Chance: X1 (Time Mandante ou Empate)
+ * 5. Dupla Chance: X2 (Time Visitante ou Empate)
  */
 export function getMarketOptionsForMatch(team1: string, team2: string): MarketOption[] {
   const t1 = team1 || 'Mandante';
@@ -46,6 +48,8 @@ export function getMarketOptionsForMatch(team1: string, team2: string): MarketOp
     { value: 'OVER_1_5', label: 'Mais de 1.5 gols', category: 'Gols' },
     { value: 'HOME_WIN', label: `Vitória da casa (${t1})`, category: 'Resultado' },
     { value: 'AWAY_WIN', label: `Vitória do visitante (${t2})`, category: 'Resultado' },
+    { value: 'DC_1X', label: `Dupla Chance: X1 (${t1} ou Empate)`, category: 'Dupla Chance' },
+    { value: 'DC_X2', label: `Dupla Chance: X2 (${t2} ou Empate)`, category: 'Dupla Chance' },
   ];
 }
 
@@ -60,6 +64,8 @@ export function getMarketLabel(marketKey: string | undefined, team1?: string, te
   if (marketKey === 'OVER_1_5') return 'Mais de 1.5 gols';
   if (marketKey === 'HOME_WIN') return `Vitória da casa (${t1})`;
   if (marketKey === 'AWAY_WIN') return `Vitória do visitante (${t2})`;
+  if (marketKey === 'DC_1X' || marketKey === 'DC_X1') return `Dupla Chance: X1 (${t1} ou Empate)`;
+  if (marketKey === 'DC_X2') return `Dupla Chance: X2 (${t2} ou Empate)`;
 
   // Fallbacks for older bets in database
   if (marketKey === 'DRAW') return 'Empate';
@@ -73,8 +79,6 @@ export function getMarketLabel(marketKey: string | undefined, team1?: string, te
   if (marketKey === 'BTTS_NO') return 'Ambas Marcam: Não';
   if (marketKey === 'DNB_HOME') return `${t1} (Empate Anula)`;
   if (marketKey === 'DNB_AWAY') return `${t2} (Empate Anula)`;
-  if (marketKey === 'DC_1X') return `${t1} ou Empate`;
-  if (marketKey === 'DC_X2') return `Empate ou ${t2}`;
   if (marketKey === 'DC_12') return `${t1} ou ${t2}`;
 
   return marketKey;
@@ -113,8 +117,9 @@ export function evaluateLegResult(
       if (isFinished) return a > h ? 'green' : 'red';
       return 'pending';
 
-    // Dupla Hipótese
+    // Dupla Hipótese / Dupla Chance
     case 'DC_1X':
+    case 'DC_X1':
       if (isFinished) return h >= a ? 'green' : 'red';
       return 'pending';
 
