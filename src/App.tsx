@@ -19,7 +19,7 @@ import { useBalancoData } from './hooks/useBalancoData';
 import { calculateStandings } from './utils/standings';
 import { getBrasiliaTodayStr, addDaysToDateStr } from './utils/dateUtils';
 import { isFemaleOrWomensMatch } from './utils/femaleFilter';
-import { filterTeamPastMatches, calculateTeamEmojis, generateFallbackTeamMatches } from './utils/competitionFilter';
+import { filterTeamPastMatches, calculateTeamEmojis } from './utils/competitionFilter';
 import { autoCheckAndRenewPushSubscription } from './utils/pushManager';
 import { X, Shield } from 'lucide-react';
 import { TeamCrest } from './components/TeamCrest';
@@ -119,24 +119,19 @@ export default function App() {
     autoCheckAndRenewPushSubscription().catch(() => {});
   }, []);
 
-  // Proactive prefetch of favorite clubs on app start
+  // Proactive instant load of official matches for all favorite clubs on app start
   useEffect(() => {
-    const initialFavs = USER_FAVORITE_CLUBS_DATA.slice(0, 30);
-    fetch('/api/fotmob/batch-teams', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teams: initialFavs }),
-    })
+    fetch('/api/fotmob/all-favorite-matches')
       .then((res) => res.json())
       .then((data) => {
-        if (data && data.teamsData && Object.keys(data.teamsData).length > 0) {
+        if (data && data.matches && Object.keys(data.matches).length > 0) {
           setTeamRawMatches((prev) => ({
+            ...data.matches,
             ...prev,
-            ...data.teamsData,
           }));
         }
       })
-      .catch(() => {});
+      .catch((err) => console.warn('Could not load all-favorite-matches:', err));
   }, []);
 
   // Intelligent synchronized fetch: Fetch real past matches for favorite clubs active in currently viewed matches
@@ -244,16 +239,18 @@ export default function App() {
     allFavList.forEach((fav) => {
       const dictId = getTeamId(fav.name);
       const effectiveId = fav.id || dictId || 10000;
-      const raw = findRawMatches(fav.name, fav.id) || generateFallbackTeamMatches(fav.name, effectiveId);
-      const filtered = filterTeamPastMatches(raw, filters, fav.name, effectiveId);
-      const emojis = calculateTeamEmojis(filtered, filters.window || 5);
-      if (emojis.length > 0) {
-        if (fav.id) forms[fav.id] = emojis;
-        const norm = normalizeTeamName(fav.name);
-        if (norm) forms[norm] = emojis;
-        const lower = fav.name.toLowerCase().trim();
-        if (lower) forms[lower] = emojis;
-        if (dictId) forms[dictId] = emojis;
+      const raw = findRawMatches(fav.name, fav.id);
+      if (raw && raw.length > 0) {
+        const filtered = filterTeamPastMatches(raw, filters, fav.name, effectiveId);
+        const emojis = calculateTeamEmojis(filtered, filters.window || 5);
+        if (emojis.length > 0) {
+          if (fav.id) forms[fav.id] = emojis;
+          const norm = normalizeTeamName(fav.name);
+          if (norm) forms[norm] = emojis;
+          const lower = fav.name.toLowerCase().trim();
+          if (lower) forms[lower] = emojis;
+          if (dictId) forms[dictId] = emojis;
+        }
       }
     });
 
@@ -266,13 +263,15 @@ export default function App() {
           const lower1 = m.team1.toLowerCase().trim();
           const dictId1 = getTeamId(m.team1);
           const effectiveId1 = m.team1Id || dictId1 || 10000;
-          const raw1 = findRawMatches(m.team1, m.team1Id) || generateFallbackTeamMatches(m.team1, effectiveId1);
-          const filtered1 = filterTeamPastMatches(raw1, filters, m.team1, effectiveId1);
-          const emojis1 = calculateTeamEmojis(filtered1, filters.window || 5);
-          if (m.team1Id) forms[m.team1Id] = emojis1;
-          if (norm1) forms[norm1] = emojis1;
-          if (lower1) forms[lower1] = emojis1;
-          if (dictId1) forms[dictId1] = emojis1;
+          const raw1 = findRawMatches(m.team1, m.team1Id);
+          if (raw1 && raw1.length > 0) {
+            const filtered1 = filterTeamPastMatches(raw1, filters, m.team1, effectiveId1);
+            const emojis1 = calculateTeamEmojis(filtered1, filters.window || 5);
+            if (m.team1Id) forms[m.team1Id] = emojis1;
+            if (norm1) forms[norm1] = emojis1;
+            if (lower1) forms[lower1] = emojis1;
+            if (dictId1) forms[dictId1] = emojis1;
+          }
         }
 
         const isFav2 = isTeamNameInFavorites(m.team2, allFavList);
@@ -281,13 +280,15 @@ export default function App() {
           const lower2 = m.team2.toLowerCase().trim();
           const dictId2 = getTeamId(m.team2);
           const effectiveId2 = m.team2Id || dictId2 || 10000;
-          const raw2 = findRawMatches(m.team2, m.team2Id) || generateFallbackTeamMatches(m.team2, effectiveId2);
-          const filtered2 = filterTeamPastMatches(raw2, filters, m.team2, effectiveId2);
-          const emojis2 = calculateTeamEmojis(filtered2, filters.window || 5);
-          if (m.team2Id) forms[m.team2Id] = emojis2;
-          if (norm2) forms[norm2] = emojis2;
-          if (lower2) forms[lower2] = emojis2;
-          if (dictId2) forms[dictId2] = emojis2;
+          const raw2 = findRawMatches(m.team2, m.team2Id);
+          if (raw2 && raw2.length > 0) {
+            const filtered2 = filterTeamPastMatches(raw2, filters, m.team2, effectiveId2);
+            const emojis2 = calculateTeamEmojis(filtered2, filters.window || 5);
+            if (m.team2Id) forms[m.team2Id] = emojis2;
+            if (norm2) forms[norm2] = emojis2;
+            if (lower2) forms[lower2] = emojis2;
+            if (dictId2) forms[dictId2] = emojis2;
+          }
         }
       });
     }

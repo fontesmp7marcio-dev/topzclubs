@@ -3,6 +3,7 @@ dotenv.config();
 
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import {
@@ -732,6 +733,30 @@ app.get('/api/fotmob/search-team', async (req, res) => {
   }
 });
 
+// In-memory cache of favorite teams' real fixtures loaded from disk
+const favoriteMatchesCachePath = path.join(process.cwd(), 'server', 'favoriteMatchesCache.json');
+let fileFavoriteMatchesCache: Record<string | number, any[]> = {};
+try {
+  if (fs.existsSync(favoriteMatchesCachePath)) {
+    fileFavoriteMatchesCache = JSON.parse(fs.readFileSync(favoriteMatchesCachePath, 'utf-8'));
+    console.log(`[Cache] Loaded ${Object.keys(fileFavoriteMatchesCache).length} cached favorite teams entries from disk`);
+  }
+} catch (e) {
+  console.warn('[Cache] Could not load favoriteMatchesCache.json:', e);
+}
+
+function updateFavoriteMatchesCache(teamId: number | string, matches: any[], teamName?: string) {
+  if (!matches || !Array.isArray(matches) || matches.length === 0) return;
+  fileFavoriteMatchesCache[teamId] = matches;
+  fileFavoriteMatchesCache[String(teamId)] = matches;
+  if (teamName) {
+    const norm = teamName.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    fileFavoriteMatchesCache[norm] = matches;
+    const clean = norm.replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '').replace(/\s+/g, ' ').trim();
+    if (clean) fileFavoriteMatchesCache[clean] = matches;
+  }
+}
+
 // API: Scrape FotMob Team Fixtures (Last 5 & Next 5 matches)
 app.get('/api/fotmob/team/:id', async (req, res) => {
   let teamId = parseInt(req.params.id, 10);
@@ -761,11 +786,19 @@ app.get('/api/fotmob/team/:id', async (req, res) => {
     if (!teamData) {
       return res.status(404).json({ error: 'Time não encontrado ou sem jogos disponíveis' });
     }
+    if (teamData.pastMatches && teamData.pastMatches.length > 0) {
+      updateFavoriteMatchesCache(teamId, teamData.pastMatches, teamData.teamName || teamNameHint);
+    }
     res.json(teamData);
   } catch (err: any) {
     console.error(`Erro ao buscar dados do time ${teamId}:`, err);
     res.status(500).json({ error: 'Erro ao buscar dados do time' });
   }
+});
+
+// API: Get All Favorite Teams Past Matches (instant, 0ms latency for initial page load)
+app.get('/api/fotmob/all-favorite-matches', (req, res) => {
+  res.json({ success: true, matches: fileFavoriteMatchesCache });
 });
 
 // API: Batch Fetch FotMob Teams Fixtures (past matches) for lightning-fast synchronized load
@@ -776,35 +809,69 @@ app.post('/api/fotmob/batch-teams', async (req, res) => {
   }
 
   const results: Record<string | number, any[]> = {};
-  await Promise.all(
-    teams.slice(0, 35).map(async (t: { id?: number; name?: string }) => {
-      try {
-        let tId = t.id ? Number(t.id) : 0;
-        const nameHint = t.name || '';
-        if ((!tId || tId <= 0) && nameHint) {
-          const searchRes = await searchFotMobTeam(nameHint);
-          if (searchRes?.team?.id) {
-            tId = searchRes.team.id;
-          }
-        }
-        if (tId && tId > 0) {
-          const data = await scrapeFotMobTeamFixtures(tId, 'team', false, nameHint);
-          if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
-            results[tId] = data.pastMatches;
-            if (t.id) results[t.id] = data.pastMatches;
-            if (nameHint) {
-              const norm = nameHint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-              results[norm] = data.pastMatches;
-              const clean = norm.replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '').replace(/\s+/g, ' ').trim();
-              if (clean) results[clean] = data.pastMatches;
+  const missingTeams: { id?: number; name?: string }[] = [];
+
+  // 1. Resolve immediately from disk/memory cache for sub-millisecond response
+  for (const t of teams) {
+    const tId = t.id ? Number(t.id) : 0;
+    const nameHint = t.name || '';
+    const norm = nameHint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+    const clean = norm.replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '').replace(/\s+/g, ' ').trim();
+
+    const cached = (tId && fileFavoriteMatchesCache[tId]) ||
+                   (norm && fileFavoriteMatchesCache[norm]) ||
+                   (clean && fileFavoriteMatchesCache[clean]) ||
+                   (tId && fileFavoriteMatchesCache[String(tId)]);
+
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      if (tId) results[tId] = cached;
+      if (t.id) results[t.id] = cached;
+      if (norm) results[norm] = cached;
+      if (clean) results[clean] = cached;
+    } else {
+      missingTeams.push(t);
+    }
+  }
+
+  // 2. Fetch missing teams safely in controlled concurrent chunks of 6 to prevent FotMob timeouts
+  const chunkSize = 6;
+  for (let i = 0; i < missingTeams.length; i += chunkSize) {
+    const chunk = missingTeams.slice(i, i + chunkSize);
+    await Promise.all(
+      chunk.map(async (t) => {
+        try {
+          let tId = t.id ? Number(t.id) : 0;
+          const nameHint = t.name || '';
+          if ((!tId || tId <= 0) && nameHint) {
+            const searchRes = await searchFotMobTeam(nameHint);
+            if (searchRes?.team?.id) {
+              tId = searchRes.team.id;
             }
           }
+          if (tId && tId > 0) {
+            const data = await scrapeFotMobTeamFixtures(tId, 'team', false, nameHint);
+            if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
+              results[tId] = data.pastMatches;
+              if (t.id) results[t.id] = data.pastMatches;
+              updateFavoriteMatchesCache(tId, data.pastMatches, data.teamName || nameHint);
+              if (nameHint) {
+                const norm = nameHint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                results[norm] = data.pastMatches;
+                const clean = norm.replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '').replace(/\s+/g, ' ').trim();
+                if (clean) results[clean] = data.pastMatches;
+              }
+              if (data.teamName) {
+                const normData = data.teamName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+                results[normData] = data.pastMatches;
+              }
+            }
+          }
+        } catch (err) {
+          // Proceed with remaining teams
         }
-      } catch (err) {
-        // Proceed with remaining teams
-      }
-    })
-  );
+      })
+    );
+  }
 
   res.json({ teamsData: results });
 });

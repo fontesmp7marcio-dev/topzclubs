@@ -176,11 +176,8 @@ export function calculateTeamEmojis(filteredMatches: MatchItem[], targetCount = 
     return rawEmojis.slice(-targetCount);
   }
 
-  // If filtered matches has fewer than targetCount items, pad from earlier realistic pattern
-  const defaultPad = ['✅', '🔥', '🛡️', '✅', '🔻'];
-  const needed = targetCount - rawEmojis.length;
-  const padding = defaultPad.slice(0, needed);
-  return [...padding, ...rawEmojis];
+  // Return the actual emojis without dummy padding to maintain true chronological order and avoid dummy results
+  return rawEmojis;
 }
 
 /**
@@ -396,10 +393,6 @@ export function getOrComputeTeamEmojis(
     }
   }
 
-  // 6. Instant Dynamic Calculation fallback
-  const effectiveId = teamId || dictId || 10000;
-  const fallbackMatches = generateFallbackTeamMatches(teamName, effectiveId);
-  const filtered = filterTeamPastMatches(fallbackMatches, filters || { competition: 'all', mando: 'all', window: 5 }, teamName, effectiveId);
-  const emojis = calculateTeamEmojis(filtered, targetWindow);
-  return emojis.length > 0 ? emojis : ['✅', '🔥', '🛡️', '✅', '🔻'];
+  // If not yet available in teamForms, return empty to avoid showing dummy or outdated results
+  return [];
 }
