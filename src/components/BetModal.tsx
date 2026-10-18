@@ -166,8 +166,9 @@ export const BetModal: React.FC<BetModalProps> = ({
           const defaultMarket = existing?.market || 'OVER_1_5';
           const meta = getMarketMetadata(defaultMarket, m.team1, m.team2);
           const autoStatus = evaluateLegResult(defaultMarket, homeScore, awayScore, m.status);
+          const isFinished = m.status === 'finished';
           const settledScore: [number, number] | null =
-            homeScore !== undefined && awayScore !== undefined ? [homeScore, awayScore] : null;
+            isFinished && homeScore !== undefined && awayScore !== undefined ? [homeScore, awayScore] : null;
 
           return {
             id: m.id,
@@ -183,7 +184,7 @@ export const BetModal: React.FC<BetModalProps> = ({
             status: autoStatus,
             score: m.score && m.score.ft ? { ft: m.score.ft } : null,
             settledScore,
-            matchStatus: m.status,
+            matchStatus: m.status || 'scheduled',
             time: m.time,
             league: (m as any).leagueName || (m as any).competition || (m as any).league || existing?.league || '',
           };
@@ -244,9 +245,15 @@ export const BetModal: React.FC<BetModalProps> = ({
       const leg = nextLegs[legIndex];
       if (!leg) return prevLegs;
 
+      const updatedMatchStatus =
+        newLegStatus === 'pending'
+          ? (leg.matchStatus === 'live' ? 'live' : 'scheduled')
+          : (leg.matchStatus === 'scheduled' || !leg.matchStatus ? 'finished' : leg.matchStatus);
+
       nextLegs[legIndex] = {
         ...leg,
         status: newLegStatus,
+        matchStatus: updatedMatchStatus,
       };
 
       const nextFormat: BetFormat = nextLegs.length > 1 ? 'Múltipla' : 'Simples';

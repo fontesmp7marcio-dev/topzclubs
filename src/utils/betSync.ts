@@ -450,10 +450,11 @@ export function syncBetWithMatches(
       homeScore !== undefined && awayScore !== undefined
         ? { ft: [homeScore, awayScore] as [number, number] }
         : leg.score;
+    const isFinished = matchStatus === 'finished';
     const settledScore: [number, number] | null =
-      homeScore !== undefined && awayScore !== undefined
+      isFinished && homeScore !== undefined && awayScore !== undefined
         ? [homeScore, awayScore]
-        : (leg.settledScore || null);
+        : (isFinished ? (leg.settledScore || null) : null);
 
     if (
       newLegStatus !== leg.status ||
@@ -470,7 +471,7 @@ export function syncBetWithMatches(
         status: newLegStatus,
         score: scoreObj,
         settledScore,
-        matchStatus,
+        matchStatus: matchStatus || leg.matchStatus || 'scheduled',
       };
     }
 
@@ -499,46 +500,181 @@ export function syncBetWithMatches(
 
 /**
  * Checks if a single bet leg has completed.
- * A leg is completed when:
- * 1. matchStatus is 'finished', or
- * 2. leg outcome is resolved (red, void, or green when not currently live/halftime), or
- * 3. it has a settledScore or final score recorded and is not in scheduled/live state.
+ * A leg is completed ONLY when its actual match has concluded/finished:
+ * - leg.matchStatus is 'finished' (or 'FT', 'encerrado', 'finalizado', etc.)
+ * - OR in teamRawMatches the match is recorded as finished / has a final result ('V' | 'E' | 'D')
+ *
+ * IMPORTANT RULES:
+ * - Do NOT count matches that are in progress (live, halftime, etc.) as completed.
+ * - Do NOT count matches that have not yet started (scheduled, fixture, etc.) as completed.
+ * - The leg's betting outcome (green/red) before match conclusion does NOT make a match completed.
  */
-export function isLegCompleted(leg: BetLeg): boolean {
+export function isLegCompleted(
+  leg: BetLeg,
+  teamRawMatches?: Record<string | number, any[]>
+): boolean {
   if (!leg) return false;
-  if (leg.matchStatus === 'finished') return true;
-  if (leg.status === 'red' || leg.status === 'void') return true;
-  if (leg.status === 'green' && leg.matchStatus !== 'live' && leg.matchStatus !== 'halftime') return true;
-  if (leg.settledScore) return true;
+
+  // 1. If match is currently in progress (live / halftime), it is NEVER completed
+  if (isLegLive(leg, teamRawMatches)) {
+    return false;
+  }
+
+  const ms = (leg.matchStatus || '').toLowerCase().trim();
+
+  // 2. If explicitly live or in progress, it is NOT completed
   if (
-    leg.score?.ft &&
-    leg.matchStatus !== 'live' &&
-    leg.matchStatus !== 'halftime' &&
-    leg.matchStatus !== 'scheduled'
+    ms === 'live' ||
+    ms === 'halftime' ||
+    ms === 'ao vivo' ||
+    ms === 'em andamento' ||
+    ms === '1t' ||
+    ms === '2t' ||
+    ms === 'intervalo' ||
+    ms === 'started' ||
+    ms === 'in_progress'
+  ) {
+    return false;
+  }
+
+  // 3. If explicitly scheduled / not started, it is NOT completed
+  if (
+    ms === 'scheduled' ||
+    ms === 'notstarted' ||
+    ms === 'ns' ||
+    ms === 'fixture' ||
+    ms === 'agendado' ||
+    ms === 'programado' ||
+    ms === 'a iniciar'
+  ) {
+    return false;
+  }
+
+  // 4. If explicitly finished, it IS completed
+  if (
+    ms === 'finished' ||
+    ms === 'ft' ||
+    ms === 'encerrado' ||
+    ms === 'finalizado' ||
+    ms === 'concluido' ||
+    ms === 'concluído' ||
+    ms === 'ended' ||
+    ms === 'pen' ||
+    ms === 'aet'
   ) {
     return true;
   }
+
+  // 5. Check against teamRawMatches if provided
+  if (teamRawMatches) {
+    const allMatches = Object.values(teamRawMatches).flat();
+    const match = allMatches.find((m) => {
+      if (!m) return false;
+      if (leg.matchId && String(m.id) === String(leg.matchId)) return true;
+      const mHome = String(m.homeTeam || m.home || '').toLowerCase().trim();
+      const mAway = String(m.awayTeam || m.away || '').toLowerCase().trim();
+      const l1 = (leg.team1 || '').toLowerCase().trim();
+      const l2 = (leg.team2 || '').toLowerCase().trim();
+      if (mHome && mAway && l1 && l2) {
+        return (mHome.includes(l1) || l1.includes(mHome)) && (mAway.includes(l2) || l2.includes(mAway));
+      }
+      return false;
+    });
+
+    if (match) {
+      const matchStatusStr = String(match.status || '').toLowerCase().trim();
+      if (
+        matchStatusStr === 'finished' ||
+        match.result === 'V' ||
+        match.result === 'E' ||
+        match.result === 'D'
+      ) {
+        return true;
+      }
+      if (
+        matchStatusStr === 'live' ||
+        matchStatusStr === 'halftime' ||
+        matchStatusStr === 'scheduled' ||
+        matchStatusStr === 'ns'
+      ) {
+        return false;
+      }
+    }
+  }
+
+  // 6. Leg is pending outcome and has no finished flag => NOT completed
+  if (leg.status === 'pending') {
+    return false;
+  }
+
+  // 7. Fallback for older persisted bets: if settledScore exists and status is settled (not pending) and not scheduled
+  if (
+    leg.settledScore &&
+    (leg.status === 'green' || leg.status === 'red' || leg.status === 'void') &&
+    ms !== 'scheduled' &&
+    ms !== 'notstarted' &&
+    ms !== 'ns'
+  ) {
+    return true;
+  }
+
   return false;
 }
 
 /**
  * Returns the game counter progress for a bet slip (completed / total).
  * E.g., for a 3-game multiple bet: initially 0/3, then 1/3, 2/3, 3/3 as games finish.
+ *
+ * The first number represents EXCLUSIVELY the number of completed matches,
+ * while the second number represents the total number of matches on the ticket.
  */
-export function getBetGameProgress(bet: BetItem): { completed: number; total: number } {
+export function getBetGameProgress(
+  bet: BetItem,
+  teamRawMatches?: Record<string | number, any[]>
+): { completed: number; total: number } {
   if (bet.legs && bet.legs.length > 0) {
     const total = bet.legs.length;
-    if (bet.status === 'Ganha' || bet.status === 'Reembolsada') {
-      return { completed: total, total };
-    }
-    const completed = bet.legs.filter(isLegCompleted).length;
+    const completed = bet.legs.filter((leg) => isLegCompleted(leg, teamRawMatches)).length;
     return { completed: Math.min(completed, total), total };
   }
 
   // Fallback for legacy bets without legs array
   const rawParts = bet.title ? bet.title.split(/\s*\+\s*/).filter(Boolean) : [];
   const total = rawParts.length > 0 ? rawParts.length : 1;
-  const isSettled = bet.status !== 'Pendente';
+
+  if (teamRawMatches && bet.title) {
+    const allMatches = Object.values(teamRawMatches).flat();
+    let completedCount = 0;
+    for (const part of rawParts) {
+      const matchup = parseMatchupFromTitle(part);
+      if (matchup) {
+        const t1 = matchup.team1.toLowerCase().trim();
+        const t2 = matchup.team2.toLowerCase().trim();
+        const m = allMatches.find((matchItem) => {
+          if (!matchItem) return false;
+          const mHome = String(matchItem.homeTeam || matchItem.home || '').toLowerCase().trim();
+          const mAway = String(matchItem.awayTeam || matchItem.away || '').toLowerCase().trim();
+          return (
+            mHome &&
+            mAway &&
+            (mHome.includes(t1) || t1.includes(mHome)) &&
+            (mAway.includes(t2) || t2.includes(mAway))
+          );
+        });
+        if (m) {
+          const ms = String(m.status || '').toLowerCase().trim();
+          if (ms === 'finished' || m.result === 'V' || m.result === 'E' || m.result === 'D') {
+            completedCount++;
+          }
+        }
+      }
+    }
+    if (completedCount > 0) {
+      return { completed: Math.min(completedCount, total), total };
+    }
+  }
+
+  const isSettled = bet.status === 'Ganha' || bet.status === 'Perdida' || bet.status === 'Reembolsada';
   return {
     completed: isSettled ? total : 0,
     total,

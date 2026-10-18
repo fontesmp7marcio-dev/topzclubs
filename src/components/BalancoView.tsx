@@ -610,7 +610,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                           {day.items.map((bet, bIdx) => {
                             const isMenuOpen = activeMenuBetId === bet.id;
                             const isStatsExpanded = !!expandedBets[bet.id];
-                            const progress = getBetGameProgress(bet);
+                            const progress = getBetGameProgress(bet, teamRawMatches);
                             const isBetLiveNow = isBetLive(bet, teamRawMatches);
 
                             return (

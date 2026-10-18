@@ -4,14 +4,16 @@ import {
   evaluateLegResult, 
   evaluateBetStatusFromLegs, 
   syncBetWithMatches, 
-  getMarketMetadata 
+  getMarketMetadata,
+  getBetGameProgress,
+  isLegCompleted
 } from '../src/utils/betSync';
 import { BetItem, BetLeg, Match } from '../src/types';
 
 function runValidationTests() {
-  console.log('=== INICIANDO BATERIA DE 17 TESTES DE VALIDAÇÃO DO MÓDULO APOSTAS + BALANÇO ===\n');
+  console.log('=== INICIANDO BATERIA DE 22 TESTES DE VALIDAÇÃO DO MÓDULO APOSTAS + BALANÇO ===\n');
   let passed = 0;
-  let total = 17;
+  let total = 22;
 
   // Teste 1: Aposta simples ganha
   {
@@ -47,8 +49,8 @@ function runValidationTests() {
     const stats = calculateBankrollStats([
       { id: '3', date: '2026-03-10', bookmaker: 'Betano', title: 'Vitória', odd: 2.0, sport: 'Futebol', status: 'Pendente', format: 'Simples', amount: 20, potentialReturn: 40, profit }
     ], 26.00);
-    if (profit === 0 && stats.currentBankroll === 26.00 && stats.totalBets === 0 && stats.pendingBets === 1) {
-      console.log('✓ Teste 3: Aposta simples pendente (não conta nas realizadas, lucro 0, banca inalterada)');
+    if (profit === 0 && stats.currentBankroll === 26.00 && stats.settledBets === 0 && stats.pendingBets === 1) {
+      console.log('✓ Teste 3: Aposta simples pendente (não conta nas liquidadas, lucro 0, banca inalterada)');
       passed++;
     } else {
       console.error('✗ Teste 3 falhou:', { profit, stats });
@@ -75,8 +77,8 @@ function runValidationTests() {
     const stats = calculateBankrollStats([
       { id: '5', date: '2026-03-10', bookmaker: 'Betano', title: 'Adiada', odd: 2.0, sport: 'Futebol', status: 'Cancelada', format: 'Simples', amount: 20, potentialReturn: 20, profit }
     ], 26.00);
-    if (profit === 0 && stats.currentBankroll === 26.00 && stats.totalBets === 0 && stats.cancelledBets === 1) {
-      console.log('✓ Teste 5: Aposta cancelada (não altera a banca e não conta no totalBets)');
+    if (profit === 0 && stats.currentBankroll === 26.00 && stats.settledBets === 0 && stats.cancelledBets === 1) {
+      console.log('✓ Teste 5: Aposta cancelada (não altera a banca e não conta nas liquidadas)');
       passed++;
     } else {
       console.error('✗ Teste 5 falhou:', { profit, stats });
@@ -306,6 +308,151 @@ function runValidationTests() {
       passed++;
     } else {
       console.error('✗ Teste 17 falhou:', { updatedBet, changed });
+    }
+  }
+
+  // Teste 18: Novo bilhete com 3 jogos começa em 0/3 (nenhum jogo concluído ainda)
+  {
+    const newTicket: BetItem = {
+      id: 'ticket-1',
+      date: '2026-03-10',
+      bookmaker: 'Betano',
+      title: 'Time A x Time B + Time C x Time D + Time E x Time F',
+      odd: 3.50,
+      sport: 'Futebol',
+      status: 'Pendente',
+      format: 'Múltipla',
+      amount: 20,
+      potentialReturn: 70,
+      profit: 0,
+      legs: [
+        { id: 'l1', matchTitle: 'Time A x Time B', matchStatus: 'scheduled', status: 'pending' },
+        { id: 'l2', matchTitle: 'Time C x Time D', matchStatus: 'scheduled', status: 'pending' },
+        { id: 'l3', matchTitle: 'Time E x Time F', matchStatus: 'scheduled', status: 'pending' },
+      ],
+    };
+    const progress = getBetGameProgress(newTicket);
+    if (progress.completed === 0 && progress.total === 3) {
+      console.log('✓ Teste 18: Novo bilhete com 3 partidas começa rigorosamente em 0/3');
+      passed++;
+    } else {
+      console.error('✗ Teste 18 falhou:', progress);
+    }
+  }
+
+  // Teste 19: Conclusão do 1º jogo atualiza o contador para 1/3
+  {
+    const ticketOneDone: BetItem = {
+      id: 'ticket-1',
+      date: '2026-03-10',
+      bookmaker: 'Betano',
+      title: 'Time A x Time B + Time C x Time D + Time E x Time F',
+      odd: 3.50,
+      sport: 'Futebol',
+      status: 'Pendente',
+      format: 'Múltipla',
+      amount: 20,
+      potentialReturn: 70,
+      profit: 0,
+      legs: [
+        { id: 'l1', matchTitle: 'Time A x Time B', matchStatus: 'finished', status: 'green', settledScore: [2, 0] },
+        { id: 'l2', matchTitle: 'Time C x Time D', matchStatus: 'scheduled', status: 'pending' },
+        { id: 'l3', matchTitle: 'Time E x Time F', matchStatus: 'scheduled', status: 'pending' },
+      ],
+    };
+    const progress = getBetGameProgress(ticketOneDone);
+    if (progress.completed === 1 && progress.total === 3) {
+      console.log('✓ Teste 19: 1º jogo concluído atualiza o contador com precisão para 1/3');
+      passed++;
+    } else {
+      console.error('✗ Teste 19 falhou:', progress);
+    }
+  }
+
+  // Teste 20: Jogo ao vivo NÃO é contado como concluído (ex: 1 concluído + 1 ao vivo + 1 agendado permanece 1/3)
+  {
+    const ticketWithLive: BetItem = {
+      id: 'ticket-1',
+      date: '2026-03-10',
+      bookmaker: 'Betano',
+      title: 'Time A x Time B + Time C x Time D + Time E x Time F',
+      odd: 3.50,
+      sport: 'Futebol',
+      status: 'Pendente',
+      format: 'Múltipla',
+      amount: 20,
+      potentialReturn: 70,
+      profit: 0,
+      legs: [
+        { id: 'l1', matchTitle: 'Time A x Time B', matchStatus: 'finished', status: 'green', settledScore: [2, 0] },
+        { id: 'l2', matchTitle: 'Time C x Time D', matchStatus: 'live', status: 'green', score: { ft: [2, 0] } },
+        { id: 'l3', matchTitle: 'Time E x Time F', matchStatus: 'scheduled', status: 'pending' },
+      ],
+    };
+    const progress = getBetGameProgress(ticketWithLive);
+    if (progress.completed === 1 && progress.total === 3) {
+      console.log('✓ Teste 20: Jogo ao vivo não é contado como concluído (mantém 1/3 até apito final)');
+      passed++;
+    } else {
+      console.error('✗ Teste 20 falhou:', progress);
+    }
+  }
+
+  // Teste 21: Conclusão do 2º jogo atualiza o contador para 2/3
+  {
+    const ticketTwoDone: BetItem = {
+      id: 'ticket-1',
+      date: '2026-03-10',
+      bookmaker: 'Betano',
+      title: 'Time A x Time B + Time C x Time D + Time E x Time F',
+      odd: 3.50,
+      sport: 'Futebol',
+      status: 'Pendente',
+      format: 'Múltipla',
+      amount: 20,
+      potentialReturn: 70,
+      profit: 0,
+      legs: [
+        { id: 'l1', matchTitle: 'Time A x Time B', matchStatus: 'finished', status: 'green', settledScore: [2, 0] },
+        { id: 'l2', matchTitle: 'Time C x Time D', matchStatus: 'finished', status: 'green', settledScore: [1, 1] },
+        { id: 'l3', matchTitle: 'Time E x Time F', matchStatus: 'scheduled', status: 'pending' },
+      ],
+    };
+    const progress = getBetGameProgress(ticketTwoDone);
+    if (progress.completed === 2 && progress.total === 3) {
+      console.log('✓ Teste 21: 2º jogo concluído atualiza o contador com precisão para 2/3');
+      passed++;
+    } else {
+      console.error('✗ Teste 21 falhou:', progress);
+    }
+  }
+
+  // Teste 22: Conclusão do 3º jogo atualiza o contador para 3/3
+  {
+    const ticketThreeDone: BetItem = {
+      id: 'ticket-1',
+      date: '2026-03-10',
+      bookmaker: 'Betano',
+      title: 'Time A x Time B + Time C x Time D + Time E x Time F',
+      odd: 3.50,
+      sport: 'Futebol',
+      status: 'Ganha',
+      format: 'Múltipla',
+      amount: 20,
+      potentialReturn: 70,
+      profit: 50,
+      legs: [
+        { id: 'l1', matchTitle: 'Time A x Time B', matchStatus: 'finished', status: 'green', settledScore: [2, 0] },
+        { id: 'l2', matchTitle: 'Time C x Time D', matchStatus: 'finished', status: 'green', settledScore: [1, 1] },
+        { id: 'l3', matchTitle: 'Time E x Time F', matchStatus: 'finished', status: 'green', settledScore: [3, 1] },
+      ],
+    };
+    const progress = getBetGameProgress(ticketThreeDone);
+    if (progress.completed === 3 && progress.total === 3) {
+      console.log('✓ Teste 22: 3º jogo concluído atualiza o contador com precisão para 3/3');
+      passed++;
+    } else {
+      console.error('✗ Teste 22 falhou:', progress);
     }
   }
 
