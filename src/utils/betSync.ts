@@ -545,3 +545,110 @@ export function getBetGameProgress(bet: BetItem): { completed: number; total: nu
   };
 }
 
+/**
+ * Checks if a single bet leg is currently in progress (live).
+ * Returns true if the match is currently live or in halftime.
+ * Returns false when the match is finished, scheduled, or cancelled.
+ */
+export function isLegLive(
+  leg: BetLeg,
+  teamRawMatches?: Record<string | number, any[]>
+): boolean {
+  if (!leg) return false;
+  // If explicitly finished, not live
+  if (leg.matchStatus === 'finished') return false;
+
+  const ms = (leg.matchStatus || '').toLowerCase().trim();
+  if (
+    ms === 'live' ||
+    ms === 'halftime' ||
+    ms === 'ao vivo' ||
+    ms === 'em andamento' ||
+    ms === '1t' ||
+    ms === '2t' ||
+    ms === 'intervalo'
+  ) {
+    return true;
+  }
+
+  // Check against teamRawMatches if provided
+  if (teamRawMatches) {
+    const allMatches = Object.values(teamRawMatches).flat();
+    const match = allMatches.find((m) => {
+      if (!m) return false;
+      if (leg.matchId && String(m.id) === String(leg.matchId)) return true;
+      const mHome = String(m.homeTeam || m.home || '').toLowerCase().trim();
+      const mAway = String(m.awayTeam || m.away || '').toLowerCase().trim();
+      const l1 = (leg.team1 || '').toLowerCase().trim();
+      const l2 = (leg.team2 || '').toLowerCase().trim();
+      if (mHome && mAway && l1 && l2) {
+        return (mHome.includes(l1) || l1.includes(mHome)) && (mAway.includes(l2) || l2.includes(mAway));
+      }
+      return false;
+    });
+
+    if (match) {
+      if (match.status === 'finished') return false;
+      const mStatus = String(match.status || '').toLowerCase().trim();
+      if (
+        mStatus === 'live' ||
+        mStatus === 'halftime' ||
+        mStatus === 'ao vivo' ||
+        mStatus === 'em andamento'
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Checks if a bet slip currently has at least one game in progress (live).
+ * Displays the indicator only when at least one game on the bet slip is currently live.
+ * The indicator automatically disappears once there are no more live games on that bet slip.
+ */
+export function isBetLive(
+  bet: BetItem,
+  teamRawMatches?: Record<string | number, any[]>
+): boolean {
+  if (!bet) return false;
+
+  if (bet.legs && bet.legs.length > 0) {
+    return bet.legs.some((leg) => isLegLive(leg, teamRawMatches));
+  }
+
+  // Fallback for legacy bets without legs array
+  if (teamRawMatches && bet.status === 'Pendente' && bet.title) {
+    const allMatches = Object.values(teamRawMatches).flat();
+    const parts = bet.title.split(/\s*\+\s*/).filter(Boolean);
+    return parts.some((part) => {
+      const matchup = parseMatchupFromTitle(part);
+      if (!matchup) return false;
+      const t1 = matchup.team1.toLowerCase().trim();
+      const t2 = matchup.team2.toLowerCase().trim();
+      const match = allMatches.find((m) => {
+        if (!m) return false;
+        const mHome = String(m.homeTeam || m.home || '').toLowerCase().trim();
+        const mAway = String(m.awayTeam || m.away || '').toLowerCase().trim();
+        return (
+          mHome &&
+          mAway &&
+          (mHome.includes(t1) || t1.includes(mHome)) &&
+          (mAway.includes(t2) || t2.includes(mAway))
+        );
+      });
+      if (match) {
+        if (match.status === 'finished') return false;
+        const ms = String(match.status || '').toLowerCase().trim();
+        return ms === 'live' || ms === 'halftime' || ms === 'ao vivo' || ms === 'em andamento';
+      }
+      return false;
+    });
+  }
+
+  return false;
+}
+
+

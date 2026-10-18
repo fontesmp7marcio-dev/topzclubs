@@ -176,6 +176,22 @@ export function useBalancoData() {
     }
   };
 
+  // Periodic background sync for active/pending bets (every 60s)
+  useEffect(() => {
+    const hasActiveBets = bets.some(
+      (b) =>
+        b.status === 'Pendente' ||
+        (b.legs && b.legs.some((l) => l.matchStatus !== 'finished'))
+    );
+    if (!hasActiveBets) return;
+
+    const timer = setInterval(() => {
+      handleSyncAllMatchResults(true);
+    }, 60000);
+
+    return () => clearInterval(timer);
+  }, [bets]);
+
   const handleSaveBet = async (bet: BetItem) => {
     const calculatedProfit = calculateBetProfit(bet.status, bet.amount, bet.odd);
     const sanitizedBet: BetItem = {

@@ -30,6 +30,8 @@ import {
   parseMatchupFromTitle,
   getMarketLabel,
   getBetGameProgress,
+  isBetLive,
+  isLegLive,
 } from '../utils/betSync';
 import { useBalancoData } from '../hooks/useBalancoData';
 
@@ -609,6 +611,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                             const isMenuOpen = activeMenuBetId === bet.id;
                             const isStatsExpanded = !!expandedBets[bet.id];
                             const progress = getBetGameProgress(bet);
+                            const isBetLiveNow = isBetLive(bet, teamRawMatches);
 
                             return (
                               <div
@@ -766,14 +769,31 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                       )}
                                     </button>
 
-                                    {/* Game Counter per Bet Slip: subtle numbers only, no boxes/borders/backgrounds */}
-                                    <span
-                                      id={`bet-counter-${bet.id}`}
-                                      className="text-xs sm:text-[13px] font-medium text-zinc-400 font-sans tracking-tight shrink-0 select-none px-0.5"
-                                      title={`Jogos finalizados no bilhete: ${progress.completed} de ${progress.total}`}
-                                    >
-                                      {progress.completed}/{progress.total}
-                                    </span>
+                                    {/* Game Counter & Live Game Indicator per Bet Slip */}
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <span
+                                        id={`bet-counter-${bet.id}`}
+                                        className="text-xs sm:text-[13px] font-medium text-zinc-400 font-sans tracking-tight shrink-0 select-none px-0.5"
+                                        title={`Jogos finalizados no bilhete: ${progress.completed} de ${progress.total}`}
+                                      >
+                                        {progress.completed}/{progress.total}
+                                      </span>
+
+                                      {/* Live Game Indicator - subtle compact box displayed only when at least one game is live */}
+                                      {isBetLiveNow && (
+                                        <span
+                                          id={`bet-live-badge-${bet.id}`}
+                                          data-testid={`bet-live-badge-${bet.id}`}
+                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8.5px] sm:text-[9.5px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 select-none animate-pulse shrink-0 font-sans shadow-xs"
+                                          title="Existe jogo ao vivo em andamento neste bilhete (LIVE / AO VIVO)"
+                                          aria-label="LIVE AO VIVO"
+                                        >
+                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                                          <span className="sr-only">LIVE </span>
+                                          <span>AO VIVO</span>
+                                        </span>
+                                      )}
+                                    </div>
 
                                     {/* Desktop Expand Matches Chevron (Hidden on mobile) */}
                                     <div className="hidden sm:block p-1 text-zinc-500">
@@ -805,6 +825,17 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                             <span className="text-[11px] font-medium text-zinc-400 font-sans select-none">
                                               {progress.completed}/{progress.total}
                                             </span>
+                                            {isBetLiveNow && (
+                                              <span
+                                                className="inline-flex items-center gap-1 px-1 py-0.2 rounded text-[8px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 select-none animate-pulse shrink-0 font-sans"
+                                                title="Existe jogo ao vivo em andamento neste bilhete (LIVE / AO VIVO)"
+                                                aria-label="LIVE AO VIVO"
+                                              >
+                                                <span className="w-1 h-1 rounded-full bg-emerald-400 shrink-0" />
+                                                <span className="sr-only">LIVE </span>
+                                                <span>AO VIVO</span>
+                                              </span>
+                                            )}
                                           </div>
                                         </div>
 
@@ -873,6 +904,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                           const legStatus = leg.status || 'pending';
                                           const scoreStr = leg.score?.ft ? `${leg.score.ft[0]}-${leg.score.ft[1]}` : null;
                                           const marketText = leg.marketLabel || (leg.market ? getMarketLabel(leg.market) : null);
+                                          const isLegLiveNow = isLegLive(leg, teamRawMatches);
 
                                           return (
                                             <MatchupPill
@@ -884,6 +916,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                               status={legStatus}
                                               market={marketText}
                                               time={leg.time || '16:00'}
+                                              isLive={isLegLiveNow}
                                               className="w-full"
                                             />
                                           );
@@ -895,6 +928,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                             const legStatus = leg.status || 'pending';
                                             const scoreStr = leg.score?.ft ? `${leg.score.ft[0]}-${leg.score.ft[1]}` : null;
                                             const marketText = leg.marketLabel || (leg.market ? getMarketLabel(leg.market) : null);
+                                            const isLegLiveNow = isLegLive(leg, teamRawMatches);
 
                                             return (
                                               <MatchupPill
@@ -907,6 +941,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                                 status={legStatus}
                                                 market={marketText}
                                                 time={leg.time || '16:00'}
+                                                isLive={isLegLiveNow}
                                                 className="w-full"
                                               />
                                             );

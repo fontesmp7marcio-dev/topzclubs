@@ -11,6 +11,7 @@ export interface MatchupPillProps {
   status?: 'green' | 'red' | 'pending' | 'void';
   market?: string | null;
   time?: string | null;
+  isLive?: boolean;
   className?: string;
 }
 
@@ -28,6 +29,7 @@ export const MatchupPill: React.FC<MatchupPillProps> = ({
   status = 'pending',
   market,
   time,
+  isLive = false,
   className = '',
 }) => {
   const t1 = team1 || 'Time A';
@@ -80,13 +82,19 @@ export const MatchupPill: React.FC<MatchupPillProps> = ({
 
       {/* Middle/Right: Info & Metrics (Horário strictly on top of Placar & Status) */}
       <div className="flex flex-col items-end justify-center gap-1 sm:gap-1.5 shrink-0 ml-1 sm:ml-2">
-        {/* Partida Time Badge (Rendered on top) */}
-        {time && (
+        {/* Partida Time or Live Badge (Rendered on top) */}
+        {isLive ? (
+          <div className="flex items-center gap-1 text-emerald-400 text-[9px] sm:text-[10px] font-black bg-emerald-950/40 px-1.5 py-0.5 rounded-md border border-emerald-500/30 select-none shrink-0 tracking-wider animate-pulse font-mono">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+            <span className="sr-only">LIVE </span>
+            <span>AO VIVO</span>
+          </div>
+        ) : time ? (
           <div className="flex items-center gap-1 text-zinc-400 text-[9px] sm:text-[10px] font-bold bg-[#15151c] px-1.5 py-0.5 rounded-md border border-[#222230] select-none shrink-0 tracking-wider">
             <Clock className="w-2.5 h-2.5 text-zinc-500 shrink-0" />
             <span>{time}</span>
           </div>
-        )}
+        ) : null}
 
         {/* Score & Status Container (Rendered on bottom) */}
         {(score || status) && (
