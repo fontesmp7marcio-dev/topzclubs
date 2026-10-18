@@ -29,6 +29,7 @@ import {
   syncBetWithMatches,
   parseMatchupFromTitle,
   getMarketLabel,
+  getBetGameProgress,
 } from '../utils/betSync';
 import { useBalancoData } from '../hooks/useBalancoData';
 
@@ -607,6 +608,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                           {day.items.map((bet, bIdx) => {
                             const isMenuOpen = activeMenuBetId === bet.id;
                             const isStatsExpanded = !!expandedBets[bet.id];
+                            const progress = getBetGameProgress(bet);
 
                             return (
                               <div
@@ -764,6 +766,15 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                       )}
                                     </button>
 
+                                    {/* Game Counter per Bet Slip: subtle numbers only, no boxes/borders/backgrounds */}
+                                    <span
+                                      id={`bet-counter-${bet.id}`}
+                                      className="text-xs sm:text-[13px] font-medium text-zinc-400 font-sans tracking-tight shrink-0 select-none px-0.5"
+                                      title={`Jogos finalizados no bilhete: ${progress.completed} de ${progress.total}`}
+                                    >
+                                      {progress.completed}/{progress.total}
+                                    </span>
+
                                     {/* Desktop Expand Matches Chevron (Hidden on mobile) */}
                                     <div className="hidden sm:block p-1 text-zinc-500">
                                       {expandedMatches[bet.id] ? (
@@ -787,9 +798,14 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                           <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
                                             ODD
                                           </span>
-                                          <span className="text-xs font-black text-white font-sans">
-                                            {bet.odd.toFixed(2)}
-                                          </span>
+                                          <div className="flex items-center gap-1.5 justify-end">
+                                            <span className="text-xs font-black text-white font-sans">
+                                              {bet.odd.toFixed(2)}
+                                            </span>
+                                            <span className="text-[11px] font-medium text-zinc-400 font-sans select-none">
+                                              {progress.completed}/{progress.total}
+                                            </span>
+                                          </div>
                                         </div>
 
                                         {/* VALOR */}

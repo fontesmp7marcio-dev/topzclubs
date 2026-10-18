@@ -496,3 +496,52 @@ export function syncBetWithMatches(
 
   return { updatedBet: bet, changed: false };
 }
+
+/**
+ * Checks if a single bet leg has completed.
+ * A leg is completed when:
+ * 1. matchStatus is 'finished', or
+ * 2. leg outcome is resolved (red, void, or green when not currently live/halftime), or
+ * 3. it has a settledScore or final score recorded and is not in scheduled/live state.
+ */
+export function isLegCompleted(leg: BetLeg): boolean {
+  if (!leg) return false;
+  if (leg.matchStatus === 'finished') return true;
+  if (leg.status === 'red' || leg.status === 'void') return true;
+  if (leg.status === 'green' && leg.matchStatus !== 'live' && leg.matchStatus !== 'halftime') return true;
+  if (leg.settledScore) return true;
+  if (
+    leg.score?.ft &&
+    leg.matchStatus !== 'live' &&
+    leg.matchStatus !== 'halftime' &&
+    leg.matchStatus !== 'scheduled'
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns the game counter progress for a bet slip (completed / total).
+ * E.g., for a 3-game multiple bet: initially 0/3, then 1/3, 2/3, 3/3 as games finish.
+ */
+export function getBetGameProgress(bet: BetItem): { completed: number; total: number } {
+  if (bet.legs && bet.legs.length > 0) {
+    const total = bet.legs.length;
+    if (bet.status === 'Ganha' || bet.status === 'Reembolsada') {
+      return { completed: total, total };
+    }
+    const completed = bet.legs.filter(isLegCompleted).length;
+    return { completed: Math.min(completed, total), total };
+  }
+
+  // Fallback for legacy bets without legs array
+  const rawParts = bet.title ? bet.title.split(/\s*\+\s*/).filter(Boolean) : [];
+  const total = rawParts.length > 0 ? rawParts.length : 1;
+  const isSettled = bet.status !== 'Pendente';
+  return {
+    completed: isSettled ? total : 0,
+    total,
+  };
+}
+
