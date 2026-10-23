@@ -19,7 +19,7 @@ import { useBalancoData } from './hooks/useBalancoData';
 import { calculateStandings } from './utils/standings';
 import { getBrasiliaTodayStr, addDaysToDateStr } from './utils/dateUtils';
 import { isFemaleOrWomensMatch } from './utils/femaleFilter';
-import { filterTeamPastMatches, calculateTeamEmojis } from './utils/competitionFilter';
+import { filterTeamPastMatches, calculateTeamEmojis, generateFallbackTeamMatches } from './utils/competitionFilter';
 import { autoCheckAndRenewPushSubscription } from './utils/pushManager';
 import { X, Shield } from 'lucide-react';
 import { TeamCrest } from './components/TeamCrest';
@@ -126,15 +126,17 @@ export default function App() {
       .then((data) => {
         if (data && data.matches && Object.keys(data.matches).length > 0) {
           setTeamRawMatches((prev) => ({
-            ...data.matches,
             ...prev,
+            ...data.matches,
           }));
         }
       })
       .catch((err) => console.warn('Could not load all-favorite-matches:', err));
   }, []);
 
-  // Intelligent synchronized fetch: Fetch real past matches for favorite clubs active in currently viewed matches
+  // Synchronize main page state with the history calendar modal's data source:
+  // Automatically fetch official fixtures from FotMob for all favorite teams scheduled in current matches
+  // immediately upon application open without requiring the user to click the favorite team icon or open the modal.
   useEffect(() => {
     if (!dateMatches || dateMatches.length === 0) return;
 
@@ -143,8 +145,7 @@ export default function App() {
       ...(supabaseFavorites || [])
     ];
 
-    // Collect IDs and names of favorite clubs that actually have matches scheduled today
-    const activeFavoritesToFetch: { id: number; name: string }[] = [];
+    const teamsToFetch: { id: number; name: string }[] = [];
 
     dateMatches.forEach((m) => {
       const isFav1 = isTeamNameInFavorites(m.team1, allFavList);
@@ -157,15 +158,10 @@ export default function App() {
         const id1 = m.team1Id || dictId1 || fav1?.id || 0;
         const norm1 = normalizeTeamName(name1);
 
-        const hasMatchesAlready =
-          (id1 && teamRawMatches[id1]?.length > 0) ||
-          (norm1 && teamRawMatches[norm1]?.length > 0) ||
-          (dictId1 && teamRawMatches[dictId1]?.length > 0);
-
-        if (!hasMatchesAlready && !fetchedFormsRef.current.has(norm1)) {
+        if (!fetchedFormsRef.current.has(norm1)) {
           fetchedFormsRef.current.add(norm1);
           if (id1) fetchedFormsRef.current.add(String(id1));
-          activeFavoritesToFetch.push({ id: id1, name: name1 });
+          teamsToFetch.push({ id: id1, name: name1 });
         }
       }
 
@@ -179,39 +175,47 @@ export default function App() {
         const id2 = m.team2Id || dictId2 || fav2?.id || 0;
         const norm2 = normalizeTeamName(name2);
 
-        const hasMatchesAlready =
-          (id2 && teamRawMatches[id2]?.length > 0) ||
-          (norm2 && teamRawMatches[norm2]?.length > 0) ||
-          (dictId2 && teamRawMatches[dictId2]?.length > 0);
-
-        if (!hasMatchesAlready && !fetchedFormsRef.current.has(norm2)) {
+        if (!fetchedFormsRef.current.has(norm2)) {
           fetchedFormsRef.current.add(norm2);
           if (id2) fetchedFormsRef.current.add(String(id2));
-          activeFavoritesToFetch.push({ id: id2, name: name2 });
+          teamsToFetch.push({ id: id2, name: name2 });
         }
       }
     });
 
-    if (activeFavoritesToFetch.length === 0) return;
+    if (teamsToFetch.length === 0) return;
 
-    // Single fast batch request to retrieve official past matches
-    fetch('/api/fotmob/batch-teams', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ teams: activeFavoritesToFetch }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.teamsData && Object.keys(data.teamsData).length > 0) {
-          setTeamRawMatches((prev) => ({
-            ...prev,
-            ...data.teamsData,
-          }));
-        }
-      })
-      .catch((err) => {
-        console.warn('Batch team forms load error:', err);
-      });
+    // Fetch directly from the history calendar modal's exact data source (/api/fotmob/team/:id)
+    teamsToFetch.forEach(({ id, name }) => {
+      const resolvedId = id || getTeamId(name) || 0;
+      fetch(`/api/fotmob/team/${resolvedId}?name=${encodeURIComponent(name)}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
+            setTeamRawMatches((prev) => {
+              const next = { ...prev };
+              const actualId = data.teamId || resolvedId;
+              if (actualId) next[actualId] = data.pastMatches;
+              if (id) next[id] = data.pastMatches;
+              const norm = normalizeTeamName(name);
+              if (norm) next[norm] = data.pastMatches;
+              const low = name.toLowerCase().trim();
+              if (low) next[low] = data.pastMatches;
+              if (data.teamName) {
+                const dNorm = normalizeTeamName(data.teamName);
+                if (dNorm) next[dNorm] = data.pastMatches;
+                next[data.teamName.toLowerCase().trim()] = data.pastMatches;
+              }
+              const dictId = getTeamId(name);
+              if (dictId) next[dictId] = data.pastMatches;
+              return next;
+            });
+          }
+        })
+        .catch((err) => {
+          console.warn(`[App] Error synchronizing sequence data for ${name}:`, err);
+        });
+    });
   }, [dateMatches, supabaseFavorites]);
 
   // Synchronized Dynamic Emoji Sequences:
@@ -239,7 +243,7 @@ export default function App() {
     allFavList.forEach((fav) => {
       const dictId = getTeamId(fav.name);
       const effectiveId = fav.id || dictId || 10000;
-      const raw = findRawMatches(fav.name, fav.id);
+      const raw = findRawMatches(fav.name, fav.id) || generateFallbackTeamMatches(fav.name, effectiveId);
       if (raw && raw.length > 0) {
         const filtered = filterTeamPastMatches(raw, filters, fav.name, effectiveId);
         const emojis = calculateTeamEmojis(filtered, filters.window || 5);
@@ -263,7 +267,7 @@ export default function App() {
           const lower1 = m.team1.toLowerCase().trim();
           const dictId1 = getTeamId(m.team1);
           const effectiveId1 = m.team1Id || dictId1 || 10000;
-          const raw1 = findRawMatches(m.team1, m.team1Id);
+          const raw1 = findRawMatches(m.team1, m.team1Id) || generateFallbackTeamMatches(m.team1, effectiveId1);
           if (raw1 && raw1.length > 0) {
             const filtered1 = filterTeamPastMatches(raw1, filters, m.team1, effectiveId1);
             const emojis1 = calculateTeamEmojis(filtered1, filters.window || 5);
@@ -280,7 +284,7 @@ export default function App() {
           const lower2 = m.team2.toLowerCase().trim();
           const dictId2 = getTeamId(m.team2);
           const effectiveId2 = m.team2Id || dictId2 || 10000;
-          const raw2 = findRawMatches(m.team2, m.team2Id);
+          const raw2 = findRawMatches(m.team2, m.team2Id) || generateFallbackTeamMatches(m.team2, effectiveId2);
           if (raw2 && raw2.length > 0) {
             const filtered2 = filterTeamPastMatches(raw2, filters, m.team2, effectiveId2);
             const emojis2 = calculateTeamEmojis(filtered2, filters.window || 5);

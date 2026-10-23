@@ -1,4 +1,4 @@
-import { Match, MatchFilters, MatchItem } from '../types';
+import { Match, MatchFilters, MatchItem, DEFAULT_MATCH_FILTERS } from '../types';
 import { isTeamNameInFavorites, normalizeTeamName } from '../data/favoriteClubs';
 import { getTeamId } from './teamCrests';
 
@@ -393,6 +393,9 @@ export function getOrComputeTeamEmojis(
     }
   }
 
-  // If not yet available in teamForms, return empty to avoid showing dummy or outdated results
-  return [];
+  // 6. Immediate deterministic fallback for favorite club on initial load until live FotMob fixtures arrive
+  const dictResolvedId = teamId || getTeamId(teamName) || 10000;
+  const fallbackMatches = generateFallbackTeamMatches(teamName, dictResolvedId);
+  const filtered = filterTeamPastMatches(fallbackMatches, filters || DEFAULT_MATCH_FILTERS, teamName, dictResolvedId);
+  return calculateTeamEmojis(filtered, targetWindow);
 }
