@@ -962,12 +962,21 @@ export async function scrapeFotMobMatchesByDate(dateStr: string): Promise<any[]>
 
         let score = null;
         if (m.status?.scoreStr) {
-          const parts = m.status.scoreStr.split(' - ');
+          const parts = m.status.scoreStr.split(/\s*[-:×x]\s*/);
           if (parts.length === 2) {
-            score = { ft: [parseInt(parts[0]), parseInt(parts[1])] };
+            const h = parseInt(parts[0], 10);
+            const a = parseInt(parts[1], 10);
+            if (!isNaN(h) && !isNaN(a)) {
+              score = { ft: [h, a] };
+            }
           }
-        } else if (m.home?.score !== undefined && m.away?.score !== undefined) {
-          score = { ft: [Number(m.home.score), Number(m.away.score)] };
+        }
+        if (!score && m.home?.score !== undefined && m.away?.score !== undefined) {
+          const h = Number(m.home.score);
+          const a = Number(m.away.score);
+          if (!isNaN(h) && !isNaN(a)) {
+            score = { ft: [h, a] };
+          }
         }
 
         // Extract time from UTC or match local time

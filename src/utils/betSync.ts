@@ -1,10 +1,280 @@
 import { BetItem, BetLeg, BetLegStatus, BetStatus, BetFormat, BankrollStats, Match, MarketOption } from '../types';
+import { normalizeTeamName } from '../data/favoriteClubs';
 
 export interface MarketMetadata {
   market: string;
   marketLabel: string;
   line?: number;
   targetSide?: string;
+}
+
+export interface OfficialMatchResult {
+  homeScore: number | undefined;
+  awayScore: number | undefined;
+  scoreText: string | null; // e.g. "3 - 2"
+  scoreObj: { ft: [number, number] } | null;
+  status: 'scheduled' | 'live' | 'finished';
+  isFinished: boolean;
+  isLive: boolean;
+  matchId?: string;
+  source: 'direct' | 'dateMatches' | 'teamRaw' | 'none';
+}
+
+/**
+ * Canonical normalizer for robust club name matching across sources
+ */
+export function normalizeTeamForMatching(name: string): string {
+  if (!name) return '';
+  let s = name
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[-_./]/g, ' ')
+    .replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb|ec|cr|se|cd)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Canonicalize common Brazilian and international team aliases
+  if (s === 'atletico mg' || s === 'atletico mineiro' || s === 'cam') return 'atletico mineiro';
+  if (s === 'athletico pr' || s === 'athletico paranaense' || s === 'atletico pr' || s === 'cap') return 'athletico paranaense';
+  if (s === 'america mg' || s === 'america mineiro') return 'america mineiro';
+  if (s === 'america rn' || s === 'america de natal') return 'america de natal';
+  if (s === 'botafogo sp' || s === 'botafogo ribeirao preto') return 'botafogo sp';
+  if (s === 'botafogo pb' || s === 'botafogo da paraiba') return 'botafogo pb';
+  if (s === 'bragantino' || s === 'red bull bragantino') return 'bragantino';
+  if (s === 'sporting' || s === 'sporting cp' || s === 'sporting lisboa' || s === 'sporting clube de portugal') return 'sporting cp';
+  if (s === 'psg' || s === 'paris saint germain' || s === 'paris') return 'psg';
+  if (s === 'bayern' || s === 'bayern munchen' || s === 'bayern munich') return 'bayern munich';
+  if (s === 'inter' || s === 'inter milan' || s === 'internazionale' || s === 'inter de milao') return 'inter milan';
+  if (s === 'inter miami' || s === 'inter miami cf') return 'inter miami';
+  if (s === 'man city' || s === 'manchester city') return 'manchester city';
+  if (s === 'man utd' || s === 'man utd fc' || s === 'manchester united') return 'manchester united';
+  if (s === 'barcelona' || s === 'fc barcelona') return 'barcelona';
+  if (s === 'barcelona sc' || s === 'barcelona guayaquil') return 'barcelona sc';
+  if (s === 'real madrid') return 'real madrid';
+  if (s === 'atletico madrid' || s === 'atletico de madrid') return 'atletico madrid';
+
+  // State abbreviations normalization
+  s = s.replace(/\bmg\b/g, 'mineiro')
+       .replace(/\bpr\b/g, 'paranaense')
+       .replace(/\brs\b/g, 'gaucho')
+       .replace(/\brj\b/g, 'carioca')
+       .replace(/\bba\b/g, 'baiano')
+       .replace(/\bgo\b/g, 'goiano')
+       .replace(/\bsc\b/g, 'catarinense')
+       .replace(/\bce\b/g, 'cearense')
+       .replace(/\s+/g, ' ')
+       .trim();
+
+  return s;
+}
+
+export function areTeamsMatching(tA?: string, tB?: string): boolean {
+  if (!tA || !tB) return false;
+  const nA = normalizeTeamForMatching(tA);
+  const nB = normalizeTeamForMatching(tB);
+  if (nA === nB) return true;
+  if (nA.length >= 4 && nB.length >= 4 && (nA.includes(nB) || nB.includes(nA))) return true;
+  return false;
+}
+
+/**
+ * Robust matching between two teams using normalized names and aliases.
+ */
+export function matchTeams(t1A?: string, t2A?: string, t1B?: string, t2B?: string): boolean {
+  if (!t1A || !t2A || !t1B || !t2B) return false;
+  return areTeamsMatching(t1A, t1B) && areTeamsMatching(t2A, t2B);
+}
+
+/**
+ * Extracts numeric scores [homeScore, awayScore] from any match object shape.
+ */
+export function extractScoreFromMatch(m: any): { homeScore?: number; awayScore?: number } {
+  if (!m) return {};
+
+  if (m.score) {
+    if (Array.isArray(m.score.ft) && typeof m.score.ft[0] === 'number' && typeof m.score.ft[1] === 'number') {
+      return { homeScore: m.score.ft[0], awayScore: m.score.ft[1] };
+    }
+    if (typeof (m.score as any).home === 'number' && typeof (m.score as any).away === 'number') {
+      return { homeScore: (m.score as any).home, awayScore: (m.score as any).away };
+    }
+    if (typeof m.score === 'string') {
+      const parts = m.score.split(/\s*[-:×x]\s*/);
+      if (parts.length === 2 && !isNaN(parseInt(parts[0], 10)) && !isNaN(parseInt(parts[1], 10))) {
+        return { homeScore: parseInt(parts[0], 10), awayScore: parseInt(parts[1], 10) };
+      }
+    }
+  }
+
+  // Also support direct string on scoreStr or m.scoreText
+  const rawStr = m.scoreStr || m.status?.scoreStr || m.scoreText;
+  if (typeof rawStr === 'string') {
+    const parts = rawStr.split(/\s*[-:×x]\s*/);
+    if (parts.length === 2 && !isNaN(parseInt(parts[0], 10)) && !isNaN(parseInt(parts[1], 10))) {
+      return { homeScore: parseInt(parts[0], 10), awayScore: parseInt(parts[1], 10) };
+    }
+  }
+
+  if (typeof m.homeScore === 'number' && typeof m.awayScore === 'number') {
+    return { homeScore: m.homeScore, awayScore: m.awayScore };
+  }
+
+  if (typeof m.home?.score === 'number' && typeof m.away?.score === 'number') {
+    return { homeScore: m.home.score, awayScore: m.away.score };
+  }
+
+  if (typeof m.score1 === 'number' && typeof m.score2 === 'number') {
+    return { homeScore: m.score1, awayScore: m.score2 };
+  }
+
+  if (Array.isArray(m.settledScore) && m.settledScore.length === 2) {
+    return { homeScore: m.settledScore[0], awayScore: m.settledScore[1] };
+  }
+
+  return {};
+}
+
+/**
+ * Normalizes match status across all formats into 'scheduled' | 'live' | 'finished'
+ */
+export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished' {
+  if (!m) return 'scheduled';
+  const s = String(m.status?.reason?.short || m.status || m.matchStatus || '').toLowerCase().trim();
+
+  if (
+    s === 'finished' ||
+    s === 'ft' ||
+    s === 'encerrado' ||
+    s === 'finalizado' ||
+    s === 'ended' ||
+    s === 'concluido' ||
+    s === 'concluído' ||
+    s === 'pen' ||
+    s === 'aet' ||
+    m.isFinished === true ||
+    m.result === 'V' ||
+    m.result === 'E' ||
+    m.result === 'D'
+  ) {
+    return 'finished';
+  }
+
+  if (
+    s === 'live' ||
+    s === 'halftime' ||
+    s === 'ao vivo' ||
+    s === 'em andamento' ||
+    s === '1t' ||
+    s === '2t' ||
+    s === 'intervalo' ||
+    s === 'started' ||
+    s === 'in_progress'
+  ) {
+    return 'live';
+  }
+
+  return 'scheduled';
+}
+
+/**
+ * Single Source of Truth to resolve the official match result & score from:
+ * 1) Provided matches list (e.g. dayMatches or dateMatches)
+ * 2) teamRawMatches (verified past fixtures for favorite clubs)
+ */
+export function resolveOfficialMatchResult(
+  target: {
+    id?: string | number;
+    matchId?: string | number;
+    team1?: string;
+    team2?: string;
+    team1Id?: number;
+    team2Id?: number;
+    date?: string;
+    score?: any;
+    settledScore?: any;
+    matchStatus?: string;
+    status?: string;
+  },
+  matches: Match[] = [],
+  teamRawMatches?: Record<string | number, any[]>
+): OfficialMatchResult {
+  const targetId = target.matchId ? String(target.matchId) : target.id ? String(target.id) : '';
+
+  // 1. Check in matches list
+  let matchFound = targetId ? matches.find((m) => String(m.id) === targetId) : undefined;
+  if (!matchFound && target.team1 && target.team2) {
+    matchFound = matches.find((m) => matchTeams(m.team1, m.team2, target.team1, target.team2));
+  }
+
+  // 2. Check in teamRawMatches
+  let rawMatchFound: any = undefined;
+  if (teamRawMatches) {
+    const allRaw = Object.values(teamRawMatches).flat();
+    if (targetId) {
+      rawMatchFound = allRaw.find((m) => m && String(m.id) === targetId);
+    }
+    if (!rawMatchFound && target.team1 && target.team2) {
+      rawMatchFound = allRaw.find((m) => {
+        if (!m) return false;
+        const mHome = m.homeTeam || m.home || m.team1;
+        const mAway = m.awayTeam || m.away || m.team2;
+        return matchTeams(mHome, mAway, target.team1, target.team2);
+      });
+    }
+  }
+
+  let homeScore: number | undefined;
+  let awayScore: number | undefined;
+  let status: 'scheduled' | 'live' | 'finished' = 'scheduled';
+
+  // Check candidate from matches list
+  if (matchFound) {
+    const scores = extractScoreFromMatch(matchFound);
+    homeScore = scores.homeScore;
+    awayScore = scores.awayScore;
+    status = extractStatusFromMatch(matchFound);
+  }
+
+  // Check candidate from teamRawMatches (especially for past verified results)
+  if (rawMatchFound) {
+    const rawScores = extractScoreFromMatch(rawMatchFound);
+    if (rawScores.homeScore !== undefined && rawScores.awayScore !== undefined) {
+      homeScore = rawScores.homeScore;
+      awayScore = rawScores.awayScore;
+    }
+    const rawStatus = extractStatusFromMatch(rawMatchFound);
+    if (rawStatus === 'finished') {
+      status = 'finished';
+    } else if (rawStatus === 'live' && status !== 'finished') {
+      status = 'live';
+    }
+  }
+
+  // Fallback to target itself if already populated
+  if (homeScore === undefined || awayScore === undefined) {
+    const targetScores = extractScoreFromMatch(target);
+    homeScore = targetScores.homeScore;
+    awayScore = targetScores.awayScore;
+    if (status === 'scheduled') {
+      status = extractStatusFromMatch(target);
+    }
+  }
+
+  const isFinished = status === 'finished';
+  const isLive = status === 'live';
+  const hasScore = typeof homeScore === 'number' && typeof awayScore === 'number';
+
+  return {
+    homeScore,
+    awayScore,
+    scoreText: hasScore ? `${homeScore} - ${awayScore}` : null,
+    scoreObj: hasScore ? { ft: [homeScore!, awayScore!] } : null,
+    status,
+    isFinished,
+    isLive,
+    matchId: matchFound ? String(matchFound.id) : rawMatchFound ? String(rawMatchFound.id) : (targetId || undefined),
+    source: matchFound ? (rawMatchFound ? 'direct' : 'dateMatches') : (rawMatchFound ? 'teamRaw' : 'none'),
+  };
 }
 
 export function getMarketMetadata(marketKey: string, team1?: string, team2?: string): MarketMetadata {
@@ -304,15 +574,12 @@ export function calculateBankrollStats(bets: BetItem[], initialCapital: number):
       case 'Reembolsada':
         refundedBets++;
         totalStake += amount;
-        // Stake devolvida integralmente, lucro líquido é 0
         break;
       case 'Pendente':
         pendingBets++;
-        // Apostas Pendentes NÃO geram lucro realizado nem contam no ROI
         break;
       case 'Cancelada':
         cancelledBets++;
-        // Apostas Canceladas NÃO geram lucro realizado nem contam no ROI
         break;
       default:
         pendingBets++;
@@ -320,9 +587,6 @@ export function calculateBankrollStats(bets: BetItem[], initialCapital: number):
     }
   }
 
-  // Regra Oficial do Balanço:
-  // totalBets: total de apostas cadastradas no sistema (ex: 7)
-  // settledBets: apostas finalizadas (ex: 4 = 2 ganhas + 2 perdidas)
   const settledBets = wonBets + lostBets + refundedBets;
   const currentBankroll = initCap + totalProfit;
   const roi = totalStake > 0 ? (totalProfit / totalStake) * 100 : 0;
@@ -352,7 +616,6 @@ export function calculateBankrollStats(bets: BetItem[], initialCapital: number):
  */
 export function parseMatchupFromTitle(title: string | undefined): { team1: string; team2: string } | null {
   if (!title) return null;
-  // If multiple games concatenated with '+'
   const firstMatch = title.split(/\s*\+\s*/)[0];
   const parts = firstMatch.split(/\s+(?:x|vs|v)\s+/i);
   if (parts.length >= 2 && parts[0].trim() && parts[1].trim()) {
@@ -365,11 +628,13 @@ export function parseMatchupFromTitle(title: string | undefined): { team1: strin
 }
 
 /**
- * Synchronizes a bet with a list of matches (from FotMob or scraper)
+ * Synchronizes a bet with a list of matches and optional teamRawMatches.
+ * Single source of truth for score synchronization across Index and Balance.
  */
 export function syncBetWithMatches(
   bet: BetItem,
-  matches: Match[]
+  matches: Match[],
+  teamRawMatches?: Record<string | number, any[]>
 ): { updatedBet: BetItem; changed: boolean } {
   let effectiveLegs: BetLeg[] = bet.legs && bet.legs.length > 0 ? [...bet.legs] : [];
 
@@ -404,69 +669,36 @@ export function syncBetWithMatches(
   let anyLegChanged = false;
 
   const updatedLegs: BetLeg[] = effectiveLegs.map((leg) => {
-    // Locate match primarily by exact ID, then fallback to sanitized team names
-    const match = matches.find((m) => {
-      const matchIdStr = String(m.id);
-      const legMatchIdStr = leg.matchId ? String(leg.matchId) : '';
-      const legIdStr = leg.id ? String(leg.id) : '';
+    const official = resolveOfficialMatchResult(leg, matches, teamRawMatches);
 
-      if (legMatchIdStr && matchIdStr === legMatchIdStr) return true;
-      if (legIdStr && matchIdStr === legIdStr) return true;
-
-      const matchTeam1 = m.team1 || (m as any).homeTeam || '';
-      const matchTeam2 = m.team2 || (m as any).awayTeam || '';
-
-      if (leg.team1 && leg.team2 && matchTeam1 && matchTeam2) {
-        const m1 = matchTeam1.toLowerCase().trim();
-        const m2 = matchTeam2.toLowerCase().trim();
-        const l1 = leg.team1.toLowerCase().trim();
-        const l2 = leg.team2.toLowerCase().trim();
-        return (m1.includes(l1) || l1.includes(m1)) && (m2.includes(l2) || l2.includes(m2));
-      }
-      return false;
-    });
-
-    if (!match) return leg;
-
-    let homeScore: number | undefined;
-    let awayScore: number | undefined;
-
-    if (match.score) {
-      if (Array.isArray(match.score.ft)) {
-        homeScore = match.score.ft[0];
-        awayScore = match.score.ft[1];
-      } else if (typeof (match.score as any).home === 'number' && typeof (match.score as any).away === 'number') {
-        homeScore = (match.score as any).home;
-        awayScore = (match.score as any).away;
-      }
-    }
-
-    const matchStatus = match.status;
-
-    // Use leg market or default to 'OVER_1_5' (Mais de 1.5 gols)
+    const homeScore = official.homeScore;
+    const awayScore = official.awayScore;
+    const matchStatus = official.status;
     const legMarket = leg.market || 'OVER_1_5';
     const newLegStatus = evaluateLegResult(legMarket, homeScore, awayScore, matchStatus);
-    const scoreObj =
-      homeScore !== undefined && awayScore !== undefined
-        ? { ft: [homeScore, awayScore] as [number, number] }
-        : leg.score;
+    const scoreObj = official.scoreObj || leg.score || null;
     const isFinished = matchStatus === 'finished';
     const settledScore: [number, number] | null =
       isFinished && homeScore !== undefined && awayScore !== undefined
         ? [homeScore, awayScore]
-        : (isFinished ? (leg.settledScore || null) : null);
+        : isFinished
+        ? leg.settledScore || null
+        : null;
+
+    const resolvedMatchId = official.matchId || leg.matchId || leg.id;
 
     if (
       newLegStatus !== leg.status ||
       matchStatus !== leg.matchStatus ||
       legMarket !== leg.market ||
       JSON.stringify(scoreObj) !== JSON.stringify(leg.score) ||
-      JSON.stringify(settledScore) !== JSON.stringify(leg.settledScore)
+      JSON.stringify(settledScore) !== JSON.stringify(leg.settledScore) ||
+      (resolvedMatchId && resolvedMatchId !== leg.matchId)
     ) {
       anyLegChanged = true;
       return {
         ...leg,
-        matchId: String(match.id),
+        matchId: resolvedMatchId,
         market: legMarket,
         status: newLegStatus,
         score: scoreObj,

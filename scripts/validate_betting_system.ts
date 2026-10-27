@@ -6,14 +6,17 @@ import {
   syncBetWithMatches, 
   getMarketMetadata,
   getBetGameProgress,
-  isLegCompleted
+  isLegCompleted,
+  resolveOfficialMatchResult,
+  extractScoreFromMatch,
+  extractStatusFromMatch
 } from '../src/utils/betSync';
 import { BetItem, BetLeg, Match } from '../src/types';
 
 function runValidationTests() {
-  console.log('=== INICIANDO BATERIA DE 22 TESTES DE VALIDAÇÃO DO MÓDULO APOSTAS + BALANÇO ===\n');
+  console.log('=== INICIANDO BATERIA DE 25 TESTES DE VALIDAÇÃO DO MÓDULO APOSTAS + BALANÇO ===\n');
   let passed = 0;
-  let total = 22;
+  let total = 25;
 
   // Teste 1: Aposta simples ganha
   {
@@ -453,6 +456,121 @@ function runValidationTests() {
       passed++;
     } else {
       console.error('✗ Teste 22 falhou:', progress);
+    }
+  }
+
+  // Teste 23: Resolução de placar e status oficial com aliases de times e teamRawMatches (Fonte Única da Verdade)
+  {
+    const teamRawMatches = {
+      '101': [
+        {
+          id: 'raw-1',
+          homeTeam: 'Atlético-MG',
+          awayTeam: 'Cruzeiro',
+          homeScore: 2,
+          awayScore: 1,
+          result: 'V',
+          isFinished: true,
+          date: '10/03/2026'
+        }
+      ]
+    };
+
+    const targetSelection = {
+      team1: 'Atlético Mineiro',
+      team2: 'Cruzeiro',
+      date: '2026-03-10'
+    };
+
+    const resolved = resolveOfficialMatchResult(targetSelection, [], teamRawMatches);
+    if (
+      resolved.isFinished &&
+      resolved.homeScore === 2 &&
+      resolved.awayScore === 1 &&
+      resolved.scoreText === '2 - 1'
+    ) {
+      console.log('✓ Teste 23: Resolução de placar e status oficial via aliases ("Atlético Mineiro" vs "Atlético-MG") e teamRawMatches funciona como Fonte Única da Verdade');
+      passed++;
+    } else {
+      console.error('✗ Teste 23 falhou:', resolved);
+    }
+  }
+
+  // Teste 24: Sincronização entre Index (partidas da data) e Balanço > Criar Aposta > Adicionar Aposta
+  {
+    const indexDateMatches: Match[] = [
+      {
+        id: 'fotmob-400',
+        round: 'Rodada 5',
+        date: '2026-03-10',
+        team1: 'Palmeiras',
+        team2: 'São Paulo',
+        time: '16:00',
+        status: 'finished',
+        score: { ft: [3, 2] }
+      }
+    ];
+
+    const betFromModal: BetItem = {
+      id: 'bet-created-in-modal',
+      date: '2026-03-10',
+      bookmaker: 'Betano',
+      title: 'Palmeiras x São Paulo - Mais de 2.5 Gols',
+      odd: 1.95,
+      sport: 'Futebol',
+      status: 'Pendente',
+      format: 'Simples',
+      amount: 100,
+      potentialReturn: 195,
+      profit: 0,
+      legs: [
+        {
+          id: 'leg-1',
+          matchId: 'fotmob-400',
+          matchTitle: 'Palmeiras x São Paulo',
+          team1: 'Palmeiras',
+          team2: 'São Paulo',
+          market: 'OVER_2_5',
+          marketLabel: 'Mais de 2.5 Gols',
+          status: 'pending'
+        }
+      ]
+    };
+
+    const { updatedBet, changed } = syncBetWithMatches(betFromModal, indexDateMatches);
+    if (
+      changed &&
+      updatedBet.status === 'Ganha' &&
+      updatedBet.profit === 95 &&
+      updatedBet.legs?.[0].status === 'green' &&
+      updatedBet.legs?.[0].settledScore?.[0] === 3 &&
+      updatedBet.legs?.[0].settledScore?.[1] === 2 &&
+      updatedBet.legs?.[0].matchStatus === 'finished'
+    ) {
+      console.log('✓ Teste 24: Sincronização automática entre Index e bilhete do Balanço atualiza placar oficial [3, 2] e status Ganha');
+      passed++;
+    } else {
+      console.error('✗ Teste 24 falhou:', { updatedBet, changed });
+    }
+  }
+
+  // Teste 25: Normalização uniforme de formatos de placar (string '2 - 1', '3:0', objeto { ft: [X, Y] }, { home, away })
+  {
+    const scoreStrHyphen = extractScoreFromMatch({ scoreStr: '2 - 1' });
+    const scoreStrColon = extractScoreFromMatch({ score: '3:0' });
+    const scoreObjFt = extractScoreFromMatch({ score: { ft: [1, 1] } });
+    const scoreObjDirect = extractScoreFromMatch({ homeScore: 4, awayScore: 0 });
+
+    if (
+      scoreStrHyphen.homeScore === 2 && scoreStrHyphen.awayScore === 1 &&
+      scoreStrColon.homeScore === 3 && scoreStrColon.awayScore === 0 &&
+      scoreObjFt.homeScore === 1 && scoreObjFt.awayScore === 1 &&
+      scoreObjDirect.homeScore === 4 && scoreObjDirect.awayScore === 0
+    ) {
+      console.log('✓ Teste 25: Formatos heterogêneos de placar normalizados com 100% de consistência sem discrepância');
+      passed++;
+    } else {
+      console.error('✗ Teste 25 falhou:', { scoreStrHyphen, scoreStrColon, scoreObjFt, scoreObjDirect });
     }
   }
 

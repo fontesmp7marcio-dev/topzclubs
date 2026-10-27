@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { X, Calendar, Calculator, Plus, Edit2, Trash2, Check, Star, RefreshCw, Flame } from 'lucide-react';
 import {
   BetItem,
@@ -20,6 +20,8 @@ import {
   evaluateBetStatusFromLegs,
   calculateBetProfit,
   parseMatchupFromTitle,
+  resolveOfficialMatchResult,
+  syncBetWithMatches,
 } from '../utils/betSync';
 import { TeamCrest } from './TeamCrest';
 import { MatchupPill } from './MatchupPill';
@@ -33,6 +35,7 @@ import {
   getEndingLossStreak,
   generateFallbackTeamMatches,
 } from '../utils/competitionFilter';
+import { getBrasiliaTodayStr } from '../utils/dateUtils';
 
 interface BetModalProps {
   isOpen: boolean;
@@ -45,6 +48,8 @@ interface BetModalProps {
   teamForms?: Record<number, string[]>;
   teamRawMatches?: Record<number, MatchItem[]>;
   filters?: MatchFilters;
+  dateMatches?: Match[];
+  selectedDate?: string;
 }
 
 export const BetModal: React.FC<BetModalProps> = ({
@@ -58,12 +63,14 @@ export const BetModal: React.FC<BetModalProps> = ({
   teamForms,
   teamRawMatches,
   filters,
+  dateMatches,
+  selectedDate,
 }) => {
   const isEditing = !!initialBet;
 
   // Form states
   const [date, setDate] = useState<string>(() => {
-    return new Date().toISOString().split('T')[0];
+    return initialBet?.date || selectedDate || getBrasiliaTodayStr();
   });
   const [bookmaker, setBookmaker] = useState<BetBookmaker>('Betano');
   const [title, setTitle] = useState<string>('');
@@ -123,10 +130,28 @@ export const BetModal: React.FC<BetModalProps> = ({
     };
   }, [isOpen]);
 
+  // Pool matches from dayMatches and main page dateMatches for the current date
+  const allAvailableMatches = useMemo(() => {
+    const list: Match[] = [...dayMatches];
+    if (dateMatches && dateMatches.length > 0) {
+      dateMatches.forEach((dm) => {
+        if (!list.some((m) => String(m.id) === String(dm.id))) {
+          list.push(dm);
+        }
+      });
+    }
+    return list;
+  }, [dayMatches, dateMatches]);
+
+  // Combined raw matches: parent prop + internal raw matches loaded dynamically
+  const combinedRawMatches = React.useMemo(() => {
+    return { ...teamRawMatches, ...internalRawMatches };
+  }, [teamRawMatches, internalRawMatches]);
+
   // Sync initial values when modal opens or initialBet changes
   useEffect(() => {
     if (initialBet) {
-      setDate(initialBet.date || new Date().toISOString().split('T')[0]);
+      setDate(initialBet.date || selectedDate || getBrasiliaTodayStr());
       setBookmaker(initialBet.bookmaker === 'Bet365' ? 'Bet365' : 'Betano');
       setTitle(initialBet.title || '');
       setOdd(String(initialBet.odd || '2.00'));
@@ -138,8 +163,8 @@ export const BetModal: React.FC<BetModalProps> = ({
       setSelectedMatchIds([]);
       setLegs(initialBet.legs || []);
     } else {
-      const todayIso = new Date().toISOString().split('T')[0];
-      setDate(todayIso);
+      const defaultDate = selectedDate || getBrasiliaTodayStr();
+      setDate(defaultDate);
       setBookmaker('Betano');
       setTitle('');
       setOdd('2.00');
@@ -152,27 +177,28 @@ export const BetModal: React.FC<BetModalProps> = ({
       setLegs([]);
     }
     setIsDeleting(false);
-  }, [initialBet, isOpen]);
+  }, [initialBet, isOpen, selectedDate]);
 
-  // Sync legs when selectedMatchIds changes from dayMatches
+  // Sync legs when selectedMatchIds changes from allAvailableMatches
   useEffect(() => {
-    if (selectedMatchIds.length > 0 && dayMatches.length > 0) {
-      const selectedList = dayMatches.filter((m) => selectedMatchIds.includes(m.id));
+    if (selectedMatchIds.length > 0 && allAvailableMatches.length > 0) {
+      const selectedList = allAvailableMatches.filter((m) => selectedMatchIds.includes(m.id));
       setLegs((prevLegs) => {
         const nextLegs: BetLeg[] = selectedList.map((m) => {
           const existing = prevLegs.find((l) => l.id === m.id || l.matchId === m.id);
-          const homeScore = m.score?.ft?.[0];
-          const awayScore = m.score?.ft?.[1];
+          const official = resolveOfficialMatchResult(m, allAvailableMatches, combinedRawMatches);
           const defaultMarket = existing?.market || 'OVER_1_5';
           const meta = getMarketMetadata(defaultMarket, m.team1, m.team2);
-          const autoStatus = evaluateLegResult(defaultMarket, homeScore, awayScore, m.status);
-          const isFinished = m.status === 'finished';
+          const autoStatus = evaluateLegResult(defaultMarket, official.homeScore, official.awayScore, official.status);
+          const isFinished = official.isFinished;
           const settledScore: [number, number] | null =
-            isFinished && homeScore !== undefined && awayScore !== undefined ? [homeScore, awayScore] : null;
+            isFinished && official.homeScore !== undefined && official.awayScore !== undefined
+              ? [official.homeScore, official.awayScore]
+              : null;
 
           return {
             id: m.id,
-            matchId: m.id,
+            matchId: official.matchId || m.id,
             matchTitle: `${m.team1} x ${m.team2}`,
             team1: m.team1,
             team2: m.team2,
@@ -182,9 +208,9 @@ export const BetModal: React.FC<BetModalProps> = ({
             line: meta.line,
             targetSide: meta.targetSide,
             status: autoStatus,
-            score: m.score && m.score.ft ? { ft: m.score.ft } : null,
+            score: official.scoreObj || (m.score && m.score.ft ? { ft: m.score.ft } : null),
             settledScore,
-            matchStatus: m.status || 'scheduled',
+            matchStatus: official.status || m.status || 'scheduled',
             time: m.time,
             league: (m as any).leagueName || (m as any).competition || (m as any).league || existing?.league || '',
           };
@@ -197,13 +223,23 @@ export const BetModal: React.FC<BetModalProps> = ({
 
         return nextLegs;
       });
-    } else if (selectedMatchIds.length === 0 && !initialBet) {
-      // If user cleared selection and not editing
-      if (dayMatches.length > 0 && legs.length > 0 && !initialBet) {
-        // keep or reset if desired
+    }
+  }, [selectedMatchIds, allAvailableMatches, combinedRawMatches, date]);
+
+  // Keep existing legs synchronized with latest official scores from all available sources
+  useEffect(() => {
+    if (initialBet && legs.length > 0 && (allAvailableMatches.length > 0 || Object.keys(combinedRawMatches).length > 0)) {
+      const { updatedBet, changed } = syncBetWithMatches(
+        { ...initialBet, legs },
+        allAvailableMatches,
+        combinedRawMatches
+      );
+      if (changed && updatedBet.legs) {
+        setLegs(updatedBet.legs);
+        setStatus(updatedBet.status);
       }
     }
-  }, [selectedMatchIds, dayMatches]);
+  }, [allAvailableMatches, combinedRawMatches, initialBet]);
 
   // Handler to change the market for an individual leg
   const handleMarketChange = (legIndex: number, newMarket: string) => {
@@ -212,22 +248,29 @@ export const BetModal: React.FC<BetModalProps> = ({
       const leg = nextLegs[legIndex];
       if (!leg) return prevLegs;
 
-      const homeScore = leg.score?.ft?.[0];
-      const awayScore = leg.score?.ft?.[1];
-      const autoStatus = evaluateLegResult(newMarket, homeScore, awayScore, leg.matchStatus);
+      const official = resolveOfficialMatchResult(leg, allAvailableMatches, combinedRawMatches);
+      const homeScore = official.homeScore !== undefined ? official.homeScore : leg.score?.ft?.[0];
+      const awayScore = official.awayScore !== undefined ? official.awayScore : leg.score?.ft?.[1];
+      const currentMatchStatus = official.status || leg.matchStatus;
+      const autoStatus = evaluateLegResult(newMarket, homeScore, awayScore, currentMatchStatus);
       const meta = getMarketMetadata(newMarket, leg.team1, leg.team2);
+      const isFinished = currentMatchStatus === 'finished';
       const settledScore: [number, number] | null =
-        homeScore !== undefined && awayScore !== undefined ? [homeScore, awayScore] : null;
+        isFinished && homeScore !== undefined && awayScore !== undefined
+          ? [homeScore, awayScore]
+          : leg.settledScore || null;
 
       nextLegs[legIndex] = {
         ...leg,
-        matchId: leg.matchId || leg.id,
+        matchId: official.matchId || leg.matchId || leg.id,
         market: newMarket,
         marketLabel: meta.marketLabel,
         line: meta.line,
         targetSide: meta.targetSide,
         status: autoStatus,
+        score: official.scoreObj || leg.score || null,
         settledScore,
+        matchStatus: currentMatchStatus,
       };
 
       const nextFormat: BetFormat = nextLegs.length > 1 ? 'Múltipla' : 'Simples';
@@ -347,11 +390,6 @@ export const BetModal: React.FC<BetModalProps> = ({
     [userFavorites, supabaseFavorites]
   );
 
-  // Combined raw matches: parent prop + internal raw matches loaded dynamically
-  const combinedRawMatches = React.useMemo(() => {
-    return { ...teamRawMatches, ...internalRawMatches };
-  }, [teamRawMatches, internalRawMatches]);
-
   // Synchronized emoji calculator using the exact same logic and filters as TeamDetailModal / Main Dashboard
   const getTeamEmojis = React.useCallback(
     (teamName: string, teamId: number): string[] => {
@@ -435,10 +473,18 @@ export const BetModal: React.FC<BetModalProps> = ({
       const streakFire2 = getEndingFireStreak(emojis2);
       const streakLoss2 = getEndingLossStreak(emojis2);
 
-      // Rule: Match qualifies if at least one favorite team comes from a foguinho (🔥 Under 1.5) OR a derrota (🔻) in its last match
-      const hasFireStreak = (isFav1 && streakFire1 >= 1) || (isFav2 && streakFire2 >= 1);
-      const hasLossStreak = (isFav1 && streakLoss1 >= 1) || (isFav2 && streakLoss2 >= 1);
-      const qualifies = (isFav1 || isFav2) && (hasFireStreak || hasLossStreak);
+      // Rule: Match qualifies strictly if at least one favorite team qualifies for the method: 1 flame, 2 flames, or defeat
+      const fav1FireQualifies = isFav1 && (streakFire1 === 1 || streakFire1 === 2);
+      const fav1LossQualifies = isFav1 && streakLoss1 >= 1;
+      const fav1Qualifies = fav1FireQualifies || fav1LossQualifies;
+
+      const fav2FireQualifies = isFav2 && (streakFire2 === 1 || streakFire2 === 2);
+      const fav2LossQualifies = isFav2 && streakLoss2 >= 1;
+      const fav2Qualifies = fav2FireQualifies || fav2LossQualifies;
+
+      const hasFireStreak = fav1FireQualifies || fav2FireQualifies;
+      const hasLossStreak = fav1LossQualifies || fav2LossQualifies;
+      const qualifies = fav1Qualifies || fav2Qualifies;
 
       return {
         match: m,
@@ -530,10 +576,10 @@ export const BetModal: React.FC<BetModalProps> = ({
         if (quickFilter === 'foguinho') {
           if (!item.hasFireStreak) return false;
           if (fireCountFilter === 2) {
-            return (item.isFav1 && item.streakFire1 >= 2) || (item.isFav2 && item.streakFire2 >= 2);
+            return (item.isFav1 && item.streakFire1 === 2) || (item.isFav2 && item.streakFire2 === 2);
           }
           if (fireCountFilter === 3) {
-            return (item.isFav1 && item.streakFire1 >= 3) || (item.isFav2 && item.streakFire2 >= 3);
+            return false;
           }
           return true;
         }
@@ -550,21 +596,21 @@ export const BetModal: React.FC<BetModalProps> = ({
     ).length;
   }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet]);
 
-  // Displayed match items (defaults strictly to streak matches, omitindo jogos já selecionados em outros bilhetes)
+  // Displayed match items (exibe estritamente apenas partidas que se qualificam para o método: 1 foguinho, 2 foguinhos ou derrota)
   const displayedMatchItems = React.useMemo(() => {
     if (showAllDayMatches) {
       return matchesWithStreakInfo
         .filter((item) => {
-          if (!item.qualifies && (quickFilter === 'foguinho' || quickFilter === 'derrota')) {
+          if (!item.qualifies) {
             return false;
           }
           if (quickFilter === 'foguinho') {
             if (!item.hasFireStreak) return false;
             if (fireCountFilter === 2) {
-              return (item.isFav1 && item.streakFire1 >= 2) || (item.isFav2 && item.streakFire2 >= 2);
+              return (item.isFav1 && item.streakFire1 === 2) || (item.isFav2 && item.streakFire2 === 2);
             }
             if (fireCountFilter === 3) {
-              return (item.isFav1 && item.streakFire1 >= 3) || (item.isFav2 && item.streakFire2 >= 3);
+              return false;
             }
             return true;
           }
@@ -635,7 +681,7 @@ export const BetModal: React.FC<BetModalProps> = ({
       return;
     }
 
-    const selectedList = dayMatches.filter((m) => nextIds.includes(m.id));
+    const selectedList = allAvailableMatches.filter((m) => nextIds.includes(m.id));
     const autoTitle = selectedList.map((m) => `${m.team1} x ${m.team2}`).join(' + ');
     setTitle(autoTitle);
 
@@ -1089,9 +1135,31 @@ export const BetModal: React.FC<BetModalProps> = ({
                             </span>
                           )}
 
-                          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/50">
-                            {m.time || '16:00'}
-                          </span>
+                          {/* Official Score & Status / Time Badge */}
+                          {(() => {
+                            const official = resolveOfficialMatchResult(m, allAvailableMatches, combinedRawMatches);
+                            if (official.isFinished) {
+                              return (
+                                <span className="text-[10px] font-bold text-white bg-zinc-800/90 px-2 py-0.5 rounded border border-zinc-700 flex items-center gap-1 shrink-0">
+                                  <span>{official.scoreText || '0 - 0'}</span>
+                                  <span className="text-[9px] text-zinc-400 font-semibold">• FT</span>
+                                </span>
+                              );
+                            }
+                            if (official.isLive) {
+                              return (
+                                <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-700 flex items-center gap-1 animate-pulse shrink-0">
+                                  <span>{official.scoreText || '0 - 0'}</span>
+                                  <span className="text-[9px] text-emerald-300 font-bold">• AO VIVO</span>
+                                </span>
+                              );
+                            }
+                            return (
+                              <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/50 shrink-0">
+                                {m.time || '16:00'}
+                              </span>
+                            );
+                          })()}
                         </div>
                       </div>
                     );

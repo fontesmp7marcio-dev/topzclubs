@@ -42,9 +42,6 @@ export default function App() {
   const [isCalendarOpen, setIsCalendarOpen] = useState<boolean>(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState<boolean>(false);
 
-  // Global shared state for Balanço, Simulador de Banca and Raio-X
-  const balancoData = useBalancoData();
-
   // Synchronized Filter State (Competição: Liga/Copa, Mando: Casa/Fora, Histórico: 5/10)
   const [filters, setFilters] = useState<MatchFilters>(DEFAULT_MATCH_FILTERS);
 
@@ -64,6 +61,9 @@ export default function App() {
     }
   });
   const fetchedFormsRef = React.useRef<Set<string>>(new Set());
+
+  // Global shared state for Balanço, Simulador de Banca and Raio-X (Single Source of Truth)
+  const balancoData = useBalancoData(teamRawMatches, dateMatches);
 
   // Save raw matches to localStorage for instant 0ms restoration on future page reloads
   useEffect(() => {
@@ -560,6 +560,8 @@ export default function App() {
             supabaseFavorites={supabaseFavorites}
             teamForms={favoriteForms}
             teamRawMatches={teamRawMatches}
+            dateMatches={dateMatches}
+            selectedDate={selectedDate}
             filters={filters}
             balancoData={balancoData}
           />

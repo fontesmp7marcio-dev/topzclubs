@@ -5,7 +5,10 @@ import { calculateBankrollStats, calculateBetProfit, syncBetWithMatches } from '
 const LOCAL_STORAGE_BETS_KEY = 'topzclubs_balanco_bets_v1';
 const LOCAL_STORAGE_BANKROLL_KEY = 'topzclubs_balanco_bankroll_v1';
 
-export function useBalancoData() {
+export function useBalancoData(
+  teamRawMatches?: Record<string | number, any[]>,
+  dateMatches?: Match[]
+) {
   const [bets, setBets] = useState<BetItem[]>(() => {
     try {
       const saved = localStorage.getItem(LOCAL_STORAGE_BETS_KEY);
@@ -94,51 +97,54 @@ export function useBalancoData() {
     return calculateBankrollStats(bets, initialCapital);
   }, [bets, initialCapital]);
 
-  // Sync all match results
+  // Sync all match results across all official sources
   const handleSyncAllMatchResults = async (silent = false, customBets?: BetItem[]) => {
     if (isSyncing) return;
     setIsSyncing(true);
 
     try {
       const sourceBets = customBets || bets;
-      const datesToFetch: string[] = Array.from(
-        new Set(
-          sourceBets
-            .filter((b) => Boolean(b.date) && (b.status === 'Pendente' || (b.legs && b.legs.length > 0)))
-            .map((b) => b.date)
-        )
-      );
+      const datesSet = new Set<string>();
 
-      if (datesToFetch.length === 0) {
-        if (!silent) {
-          setNotification({
-            message: 'Nenhuma aposta pendente para sincronizar.',
-            type: 'info',
-          });
+      sourceBets.forEach((b) => {
+        if (b.status === 'Pendente' || (b.legs && b.legs.length > 0)) {
+          if (b.date) datesSet.add(b.date);
+          if (b.legs) {
+            b.legs.forEach((l) => {
+              if (l.date) datesSet.add(l.date);
+            });
+          }
         }
-        setIsSyncing(false);
-        return;
-      }
+      });
+
+      const datesToFetch: string[] = Array.from(datesSet);
 
       const matchesByDate: Record<string, Match[]> = {};
-      await Promise.all(
-        datesToFetch.map(async (d) => {
-          try {
-            const res = await fetch(`/api/fotmob/matches-by-date?date=${d}`);
-            const data = await res.json();
-            if (data && Array.isArray(data.matches)) {
-              matchesByDate[d] = data.matches;
+      if (datesToFetch.length > 0) {
+        await Promise.all(
+          datesToFetch.map(async (d) => {
+            try {
+              const res = await fetch(`/api/fotmob/matches-by-date?date=${d}`);
+              const data = await res.json();
+              if (data && Array.isArray(data.matches)) {
+                matchesByDate[d] = data.matches;
+              }
+            } catch (e) {
+              console.warn(`Failed to fetch matches for date ${d}:`, e);
             }
-          } catch (e) {
-            console.warn(`Failed to fetch matches for date ${d}:`, e);
-          }
-        })
-      );
+          })
+        );
+      }
+
+      // Pool all available matches from fetched dates and main page dateMatches
+      const allPoolMatches: Match[] = [...(dateMatches || [])];
+      Object.values(matchesByDate).forEach((list) => {
+        allPoolMatches.push(...list);
+      });
 
       let updatedCount = 0;
       const updatedBets = sourceBets.map((bet) => {
-        const dayMatches = matchesByDate[bet.date] || [];
-        const { updatedBet, changed } = syncBetWithMatches(bet, dayMatches);
+        const { updatedBet, changed } = syncBetWithMatches(bet, allPoolMatches, teamRawMatches);
         if (changed) {
           updatedCount++;
           fetch('/api/user-bets', {
@@ -175,6 +181,22 @@ export function useBalancoData() {
       setIsSyncing(false);
     }
   };
+
+  // Synchronize automatically when teamRawMatches or dateMatches receive new finalized results
+  useEffect(() => {
+    if (!bets || bets.length === 0) return;
+    const hasUnfinishedBets = bets.some(
+      (b) =>
+        b.status === 'Pendente' ||
+        (b.legs && b.legs.some((l) => l.matchStatus !== 'finished'))
+    );
+    if (
+      hasUnfinishedBets &&
+      ((dateMatches && dateMatches.length > 0) || (teamRawMatches && Object.keys(teamRawMatches).length > 0))
+    ) {
+      handleSyncAllMatchResults(true);
+    }
+  }, [teamRawMatches, dateMatches]);
 
   // Periodic background sync for active/pending bets (every 60s)
   useEffect(() => {

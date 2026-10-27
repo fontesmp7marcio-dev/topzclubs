@@ -32,6 +32,8 @@ import {
   getBetGameProgress,
   isBetLive,
   isLegLive,
+  resolveOfficialMatchResult,
+  evaluateLegResult,
 } from '../utils/betSync';
 import { useBalancoData } from '../hooks/useBalancoData';
 
@@ -55,6 +57,8 @@ export interface BalancoViewProps {
   teamRawMatches?: Record<string | number, MatchItem[]>;
   filters?: MatchFilters;
   balancoData?: ReturnType<typeof useBalancoData>;
+  dateMatches?: Match[];
+  selectedDate?: string;
 }
 
 export const BalancoView: React.FC<BalancoViewProps> = ({
@@ -63,8 +67,10 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
   teamRawMatches,
   filters,
   balancoData: externalBalancoData,
+  dateMatches,
+  selectedDate,
 }) => {
-  const internalBalancoData = useBalancoData();
+  const internalBalancoData = useBalancoData(teamRawMatches, dateMatches);
   const balancoData = externalBalancoData || internalBalancoData;
 
   const {
@@ -901,10 +907,18 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                         // Confronto único (Aposta Simples)
                                         (() => {
                                           const leg = bet.legs[0];
-                                          const legStatus = leg.status || 'pending';
-                                          const scoreStr = leg.score?.ft ? `${leg.score.ft[0]}-${leg.score.ft[1]}` : null;
+                                          const official = resolveOfficialMatchResult(leg, dateMatches || [], teamRawMatches);
+                                          const scoreStr = leg.score?.ft
+                                            ? `${leg.score.ft[0]}-${leg.score.ft[1]}`
+                                            : (official.scoreText || null);
+                                          const legStatus =
+                                            leg.status && leg.status !== 'pending'
+                                              ? leg.status
+                                              : (official.isFinished
+                                                  ? evaluateLegResult(leg.market, official.homeScore, official.awayScore, official.status)
+                                                  : leg.status || 'pending');
                                           const marketText = leg.marketLabel || (leg.market ? getMarketLabel(leg.market) : null);
-                                          const isLegLiveNow = isLegLive(leg, teamRawMatches);
+                                          const isLegLiveNow = isLegLive(leg, teamRawMatches) || official.isLive;
 
                                           return (
                                             <MatchupPill
@@ -925,10 +939,18 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
                                         // Múltiplos confrontos (Até 5 por bilhete - Diagramação limpa em coluna única, super legível no mobile)
                                         <div className="flex flex-col gap-2 w-full">
                                           {bet.legs.map((leg, lIdx) => {
-                                            const legStatus = leg.status || 'pending';
-                                            const scoreStr = leg.score?.ft ? `${leg.score.ft[0]}-${leg.score.ft[1]}` : null;
+                                            const official = resolveOfficialMatchResult(leg, dateMatches || [], teamRawMatches);
+                                            const scoreStr = leg.score?.ft
+                                              ? `${leg.score.ft[0]}-${leg.score.ft[1]}`
+                                              : (official.scoreText || null);
+                                            const legStatus =
+                                              leg.status && leg.status !== 'pending'
+                                                ? leg.status
+                                                : (official.isFinished
+                                                    ? evaluateLegResult(leg.market, official.homeScore, official.awayScore, official.status)
+                                                    : leg.status || 'pending');
                                             const marketText = leg.marketLabel || (leg.market ? getMarketLabel(leg.market) : null);
-                                            const isLegLiveNow = isLegLive(leg, teamRawMatches);
+                                            const isLegLiveNow = isLegLive(leg, teamRawMatches) || official.isLive;
 
                                             return (
                                               <MatchupPill
@@ -998,6 +1020,8 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
         teamForms={teamForms}
         teamRawMatches={teamRawMatches}
         filters={filters}
+        dateMatches={dateMatches}
+        selectedDate={selectedDate}
       />
 
       {/* Bankroll Capital Adjustment Modal */}
