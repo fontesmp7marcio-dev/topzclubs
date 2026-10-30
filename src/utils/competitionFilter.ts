@@ -159,37 +159,30 @@ export function calculateMatchEmoji(m: MatchItem): string {
 
 /**
  * Calculates the emoji sequence for a filtered list of matches.
- * The input `filteredMatches` is ordered from most recent to oldest.
- * We reverse it so that the emoji sequence reads chronologically from left to right
- * (most recent match is on the far right).
- * Ensures a minimum sequence of `targetCount` (default: 5) so favorite clubs always have a full 5-game history illustrated.
+ * Matches are ordered exactly as displayed in the Historical Calendar (most recent first).
+ * Produces the sequence corresponding to the last matches shown in the Historical Calendar.
  */
 export function calculateTeamEmojis(filteredMatches: MatchItem[], targetCount = 5): string[] {
   if (!filteredMatches || filteredMatches.length === 0) return [];
 
-  const rawEmojis = [...filteredMatches]
-    .reverse()
+  const rawEmojis = filteredMatches
+    .slice(0, targetCount)
     .map(calculateMatchEmoji)
     .filter(Boolean);
 
-  if (rawEmojis.length >= targetCount) {
-    return rawEmojis.slice(-targetCount);
-  }
-
-  // Return the actual emojis without dummy padding to maintain true chronological order and avoid dummy results
   return rawEmojis;
 }
 
 /**
- * Calculates the consecutive streak of fire emojis (🔥 Under 1.5) ending at the most recent match.
- * Since calculateTeamEmojis produces chronological emojis from left to right (most recent at the far right),
- * we check from the end (emojis.length - 1) backwards.
+ * Calculates the consecutive streak of fire emojis (🔥 Under 1.5) starting from the most recent match.
+ * Since index 0 is the most recent match (matching Historical Calendar ordering),
+ * we check from index 0 forwards.
  * Returns 0 if the most recent match is not a fire emoji (streak broken or absent).
  */
 export function getEndingFireStreak(emojis?: string[]): number {
   if (!emojis || emojis.length === 0) return 0;
   let streak = 0;
-  for (let i = emojis.length - 1; i >= 0; i--) {
+  for (let i = 0; i < emojis.length; i++) {
     if (emojis[i] === '🔥') {
       streak++;
     } else {
@@ -200,15 +193,15 @@ export function getEndingFireStreak(emojis?: string[]): number {
 }
 
 /**
- * Calculates the consecutive streak of loss emojis (🔻 Derrota) ending at the most recent match.
- * Since calculateTeamEmojis produces chronological emojis from left to right (most recent at the far right),
- * we check from the end (emojis.length - 1) backwards.
+ * Calculates the consecutive streak of loss emojis (🔻 Derrota) starting from the most recent match.
+ * Since index 0 is the most recent match (matching Historical Calendar ordering),
+ * we check from index 0 forwards.
  * Returns 0 if the most recent match is not a loss emoji (streak broken or absent).
  */
 export function getEndingLossStreak(emojis?: string[]): number {
   if (!emojis || emojis.length === 0) return 0;
   let streak = 0;
-  for (let i = emojis.length - 1; i >= 0; i--) {
+  for (let i = 0; i < emojis.length; i++) {
     if (emojis[i] === '🔻') {
       streak++;
     } else {
@@ -353,25 +346,25 @@ export function getOrComputeTeamEmojis(
 
   // 1. Direct ID lookup in teamForms
   if (teamId && teamForms && teamForms[teamId] && teamForms[teamId].length > 0) {
-    return teamForms[teamId].slice(-targetWindow);
+    return teamForms[teamId].slice(0, targetWindow);
   }
 
   // 2. Normalized name lookup in teamForms
   const norm = normalizeTeamName(teamName);
   if (norm && teamForms && (teamForms as any)[norm] && (teamForms as any)[norm].length > 0) {
-    return (teamForms as any)[norm].slice(-targetWindow);
+    return (teamForms as any)[norm].slice(0, targetWindow);
   }
 
   // 3. Lowercase name lookup in teamForms
   const lower = (teamName || '').toLowerCase().trim();
   if (lower && teamForms && (teamForms as any)[lower] && (teamForms as any)[lower].length > 0) {
-    return (teamForms as any)[lower].slice(-targetWindow);
+    return (teamForms as any)[lower].slice(0, targetWindow);
   }
 
   // 4. Authoritative dictionary ID lookup in teamForms
   const dictId = getTeamId(teamName);
   if (dictId && teamForms && teamForms[dictId] && teamForms[dictId].length > 0) {
-    return teamForms[dictId].slice(-targetWindow);
+    return teamForms[dictId].slice(0, targetWindow);
   }
 
   // 5. Check if team is in favoritesList by name or ID, and check their form
@@ -384,11 +377,11 @@ export function getOrComputeTeamEmojis(
     );
     if (matchedFav) {
       if (teamForms[matchedFav.id] && teamForms[matchedFav.id].length > 0) {
-        return teamForms[matchedFav.id].slice(-targetWindow);
+        return teamForms[matchedFav.id].slice(0, targetWindow);
       }
       const favNorm = normalizeTeamName(matchedFav.name);
       if (favNorm && (teamForms as any)[favNorm] && (teamForms as any)[favNorm].length > 0) {
-        return (teamForms as any)[favNorm].slice(-targetWindow);
+        return (teamForms as any)[favNorm].slice(0, targetWindow);
       }
     }
   }

@@ -14,7 +14,6 @@ import { BalancoView } from './components/BalancoView';
 import { SimuladorBanca } from './components/SimuladorBanca';
 import { RelatorioConfrontos } from './components/RelatorioConfrontos';
 import { NotificacoesView } from './components/NotificacoesView';
-import { InAppNotificationModal } from './components/InAppNotificationModal';
 import { useBalancoData } from './hooks/useBalancoData';
 import { calculateStandings } from './utils/standings';
 import { getBrasiliaTodayStr, addDaysToDateStr } from './utils/dateUtils';
@@ -65,13 +64,16 @@ export default function App() {
   // Global shared state for Balanço, Simulador de Banca and Raio-X (Single Source of Truth)
   const balancoData = useBalancoData(teamRawMatches, dateMatches);
 
-  // Save raw matches to localStorage for instant 0ms restoration on future page reloads
+  // Save raw matches to localStorage for instant 0ms restoration on future page reloads (debounced)
   useEffect(() => {
-    try {
-      if (Object.keys(teamRawMatches).length > 0) {
-        localStorage.setItem('topzclubs_team_raw_matches_v2', JSON.stringify(teamRawMatches));
-      }
-    } catch {}
+    const timer = setTimeout(() => {
+      try {
+        if (Object.keys(teamRawMatches).length > 0) {
+          localStorage.setItem('topzclubs_team_raw_matches_v2', JSON.stringify(teamRawMatches));
+        }
+      } catch {}
+    }, 800);
+    return () => clearTimeout(timer);
   }, [teamRawMatches]);
 
   // Real-time synchronization
@@ -126,8 +128,8 @@ export default function App() {
       .then((data) => {
         if (data && data.matches && Object.keys(data.matches).length > 0) {
           setTeamRawMatches((prev) => ({
-            ...prev,
             ...data.matches,
+            ...prev,
           }));
         }
       })
@@ -185,37 +187,24 @@ export default function App() {
 
     if (teamsToFetch.length === 0) return;
 
-    // Fetch directly from the history calendar modal's exact data source (/api/fotmob/team/:id)
-    teamsToFetch.forEach(({ id, name }) => {
-      const resolvedId = id || getTeamId(name) || 0;
-      fetch(`/api/fotmob/team/${resolvedId}?name=${encodeURIComponent(name)}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
-            setTeamRawMatches((prev) => {
-              const next = { ...prev };
-              const actualId = data.teamId || resolvedId;
-              if (actualId) next[actualId] = data.pastMatches;
-              if (id) next[id] = data.pastMatches;
-              const norm = normalizeTeamName(name);
-              if (norm) next[norm] = data.pastMatches;
-              const low = name.toLowerCase().trim();
-              if (low) next[low] = data.pastMatches;
-              if (data.teamName) {
-                const dNorm = normalizeTeamName(data.teamName);
-                if (dNorm) next[dNorm] = data.pastMatches;
-                next[data.teamName.toLowerCase().trim()] = data.pastMatches;
-              }
-              const dictId = getTeamId(name);
-              if (dictId) next[dictId] = data.pastMatches;
-              return next;
-            });
-          }
-        })
-        .catch((err) => {
-          console.warn(`[App] Error synchronizing sequence data for ${name}:`, err);
-        });
-    });
+    // Fetch batch fixtures directly for lightning-fast 1-pass synchronization
+    fetch('/api/fotmob/batch-teams', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ teams: teamsToFetch }),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.teamsData && Object.keys(data.teamsData).length > 0) {
+          setTeamRawMatches((prev) => ({
+            ...prev,
+            ...data.teamsData,
+          }));
+        }
+      })
+      .catch((err) => {
+        console.warn('[App] Error batch synchronizing sequence data:', err);
+      });
   }, [dateMatches, supabaseFavorites]);
 
   // Synchronized Dynamic Emoji Sequences:
@@ -450,21 +439,21 @@ export default function App() {
   }, [leagueData]);
 
   // Date controls
-  const handlePrevDate = () => {
+  const handlePrevDate = useCallback(() => {
     setSelectedDate((prev) => addDaysToDateStr(prev, -1));
-  };
+  }, []);
 
-  const handleNextDate = () => {
+  const handleNextDate = useCallback(() => {
     setSelectedDate((prev) => addDaysToDateStr(prev, 1));
-  };
+  }, []);
 
   // Team selection handler
-  const handleSelectTeam = (name: string, id?: number) => {
+  const handleSelectTeam = useCallback((name: string, id?: number) => {
     setSelectedTeam({ name, id });
-  };
+  }, []);
 
   // Toggle Favorite handler (adds or removes a team from user favorites & syncs with Supabase)
-  const handleToggleFavorite = async (club: { id: number; name: string; country: string; league?: string }) => {
+  const handleToggleFavorite = useCallback(async (club: { id: number; name: string; country: string; league?: string }) => {
     setSupabaseFavorites((prev) => {
       const normClub = normalizeTeamName(club.name);
       const verifiedId = club.id || getTeamId(club.name);
@@ -516,7 +505,7 @@ export default function App() {
 
       return updated;
     });
-  };
+  }, []);
 
   // Clear all favorite clubs from local state and Supabase
   const handleClearAllFavorites = async () => {
@@ -537,9 +526,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0d0d0d] text-zinc-100 flex flex-col antialiased selection:bg-emerald-500 selection:text-black">
-      {/* Global In-App Pop-up Notification */}
-      <InAppNotificationModal />
-      
       {/* 1. TOP HEADER (Screenshots 2 & 10) */}
       <FotMobHeader
         selectedLeague={selectedLeague}

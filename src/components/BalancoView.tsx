@@ -61,7 +61,7 @@ export interface BalancoViewProps {
   selectedDate?: string;
 }
 
-export const BalancoView: React.FC<BalancoViewProps> = ({
+export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
   supabaseFavorites,
   teamForms,
   teamRawMatches,
@@ -70,7 +70,7 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
   dateMatches,
   selectedDate,
 }) => {
-  const internalBalancoData = useBalancoData(teamRawMatches, dateMatches);
+  const internalBalancoData = useBalancoData(teamRawMatches, dateMatches, !externalBalancoData);
   const balancoData = externalBalancoData || internalBalancoData;
 
   const {
@@ -1005,24 +1005,26 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
         </div>
       )}
 
-      {/* Add / Edit Bet Modal */}
-      <BetModal
-        isOpen={isAddModalOpen || !!editingBet}
-        initialBet={editingBet}
-        existingBets={bets}
-        onClose={() => {
-          setIsAddModalOpen(false);
-          setEditingBet(null);
-        }}
-        onSave={handleSaveBet}
-        onDelete={handleDeleteBet}
-        supabaseFavorites={supabaseFavorites}
-        teamForms={teamForms}
-        teamRawMatches={teamRawMatches}
-        filters={filters}
-        dateMatches={dateMatches}
-        selectedDate={selectedDate}
-      />
+      {/* Add / Edit Bet Modal - Rendered ONLY when opened for zero background overhead */}
+      {(isAddModalOpen || !!editingBet) && (
+        <BetModal
+          isOpen={true}
+          initialBet={editingBet}
+          existingBets={bets}
+          onClose={() => {
+            setIsAddModalOpen(false);
+            setEditingBet(null);
+          }}
+          onSave={handleSaveBet}
+          onDelete={handleDeleteBet}
+          supabaseFavorites={supabaseFavorites}
+          teamForms={teamForms}
+          teamRawMatches={teamRawMatches}
+          filters={filters}
+          dateMatches={dateMatches}
+          selectedDate={selectedDate}
+        />
+      )}
 
       {/* Bankroll Capital Adjustment Modal */}
       {isBankrollModalOpen && (
@@ -1080,4 +1082,5 @@ export const BalancoView: React.FC<BalancoViewProps> = ({
 
     </div>
   );
-};
+});
+

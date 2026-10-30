@@ -15,7 +15,7 @@ interface FotMobHeaderProps {
   onNavTabChange: (tab: string) => void;
 }
 
-export const FotMobHeader: React.FC<FotMobHeaderProps> = ({
+export const FotMobHeader: React.FC<FotMobHeaderProps> = React.memo(({
   selectedLeague,
   onSelectLeague,
   searchQuery,
@@ -213,4 +213,5 @@ export const FotMobHeader: React.FC<FotMobHeaderProps> = ({
       </div>
     </header>
   );
-};
+});
+

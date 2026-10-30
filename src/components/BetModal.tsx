@@ -52,6 +52,311 @@ interface BetModalProps {
   selectedDate?: string;
 }
 
+interface MatchSelectionRowProps {
+  item: any;
+  isChecked: boolean;
+  odds?: { bet365: boolean; betano: boolean };
+  official: any;
+  onToggle: (match: Match) => void;
+}
+
+const MatchSelectionRow = React.memo<MatchSelectionRowProps>(({
+  item,
+  isChecked,
+  odds,
+  official,
+  onToggle,
+}) => {
+  const m = item.match;
+
+  return (
+    <div
+      onClick={() => onToggle(m)}
+      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-left ${
+        isChecked
+          ? 'bg-emerald-950/40 border-emerald-500 shadow-sm'
+          : 'bg-[#1a1a20] hover:bg-[#22222a] border-[#292934]'
+      }`}
+    >
+      <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+        {/* Checkbox indicator */}
+        <div
+          className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 mt-0.5 sm:mt-0 transition-colors ${
+            isChecked
+              ? 'bg-emerald-500 border-emerald-400 text-black'
+              : 'border-zinc-600 bg-[#25252e]'
+          }`}
+        >
+          {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
+        </div>
+
+        {/* Teams & Fire / Loss Details */}
+        <div className="flex flex-col min-w-0 flex-1">
+          {/* Confrontation Line */}
+          <div className="flex items-center gap-1.5 text-xs font-bold text-white flex-wrap">
+            {/* Team 1 */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <TeamCrest teamName={m.team1} teamId={m.team1Id} size={16} />
+              <span
+                className={
+                  item.isFav1
+                    ? 'text-[#ccff00] font-black flex items-center gap-1'
+                    : 'text-zinc-100'
+                }
+              >
+                {item.isFav1 && (
+                  <span className="text-amber-400 font-normal shrink-0">★</span>
+                )}
+                <span>{m.team1}</span>
+              </span>
+
+              {item.streakFire1 >= 1 && (
+                <span
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-amber-500/15 border border-amber-500/30 text-[9px] font-black text-amber-400 shrink-0"
+                  title={`Último(s) jogo(s) Under 1.5: ${item.streakFire1} em sequência`}
+                >
+                  <span>🔥</span>
+                  <span>{item.streakFire1 === 1 ? '1 foguinho' : `${item.streakFire1} foguinhos`}</span>
+                </span>
+              )}
+            </div>
+
+            <span className="text-zinc-500 text-[10px] font-normal mx-0.5 shrink-0">vs</span>
+
+            {/* Team 2 */}
+            <div className="flex items-center gap-1.5 min-w-0">
+              <TeamCrest teamName={m.team2} teamId={m.team2Id} size={16} />
+              <span
+                className={
+                  item.isFav2
+                    ? 'text-[#ccff00] font-black flex items-center gap-1'
+                    : 'text-zinc-100'
+                }
+              >
+                {item.isFav2 && (
+                  <span className="text-amber-400 font-normal shrink-0">★</span>
+                )}
+                <span>{m.team2}</span>
+              </span>
+
+              {item.streakFire2 >= 1 && (
+                <span
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-amber-500/15 border border-amber-500/30 text-[9px] font-black text-amber-400 shrink-0"
+                  title={`Último(s) jogo(s) Under 1.5: ${item.streakFire2} em sequência`}
+                >
+                  <span>🔥</span>
+                  <span>{item.streakFire2 === 1 ? '1 foguinho' : `${item.streakFire2} foguinhos`}</span>
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Second Row: League, Time & Mini Form Emoji Sequence */}
+          <div className="flex items-center gap-2 flex-wrap text-[10px] text-zinc-400 mt-1">
+            <span>{m.leagueName || 'Liga'}</span>
+            <span>•</span>
+            <span>{m.time || '16:00'}</span>
+
+            {/* Show form sequence for fav team with fire */}
+            {item.isFav1 && item.streakFire1 >= 1 && item.emojis1.length > 0 && (
+              <div className="flex items-center gap-1 ml-auto sm:ml-2 bg-[#121216] px-1.5 py-0.5 rounded border border-[#292934]">
+                <span className="text-[9px] text-zinc-400 font-semibold">{m.team1}:</span>
+                <div className="flex items-center gap-0.5">
+                  {item.emojis1.map((emo: string, eIdx: number) => (
+                    <span key={eIdx} className="text-[9px]" title={emo === '🔥' ? 'Under 1.5' : emo === '🔻' ? 'Derrota' : emo}>
+                      {emo}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {item.isFav2 && item.streakFire2 >= 1 && item.emojis2.length > 0 && (
+              <div className="flex items-center gap-1 ml-auto sm:ml-2 bg-[#121216] px-1.5 py-0.5 rounded border border-[#292934]">
+                <span className="text-[9px] text-zinc-400 font-semibold">{m.team2}:</span>
+                <div className="flex items-center gap-0.5">
+                  {item.emojis2.map((emo: string, eIdx: number) => (
+                    <span key={eIdx} className="text-[9px]" title={emo === '🔥' ? 'Under 1.5' : emo === '🔻' ? 'Derrota' : emo}>
+                      {emo}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Time pill & Bookmaker Badges */}
+      <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+        {odds?.bet365 && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-black tracking-tight bg-[#005a36] text-white shadow-sm border border-[#006e42]/60 select-none"
+            title="Mercado Total de Gols 1.5 aberto na Bet365"
+          >
+            <span className="text-white font-bold">bet</span>
+            <span className="text-[#ffdf1b] font-black ml-0.5">365</span>
+          </span>
+        )}
+
+        {odds?.betano && (
+          <span
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-black italic tracking-tight bg-[#ea5400] text-white shadow-sm border border-[#ff661a]/60 select-none"
+            title="Mercado Total de Gols 1.5 aberto na Betano"
+          >
+            Betano
+          </span>
+        )}
+
+        {/* Official Score & Status / Time Badge */}
+        {official.isFinished ? (
+          <span className="text-[10px] font-bold text-white bg-zinc-800/90 px-2 py-0.5 rounded border border-zinc-700 flex items-center gap-1 shrink-0">
+            <span>{official.scoreText || '0 - 0'}</span>
+            <span className="text-[9px] text-zinc-400 font-semibold">• FT</span>
+          </span>
+        ) : official.isLive ? (
+          <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-700 flex items-center gap-1 animate-pulse shrink-0">
+            <span>{official.scoreText || '0 - 0'}</span>
+            <span className="text-[9px] text-emerald-300 font-bold">• AO VIVO</span>
+          </span>
+        ) : (
+          <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/50 shrink-0">
+            {m.time || '16:00'}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+});
+
+interface LegSelectionRowProps {
+  leg: BetLeg;
+  idx: number;
+  options: { value: string; label: string }[];
+  onMarketChange: (legIndex: number, market: string) => void;
+  onTimeChange: (legIndex: number, time: string) => void;
+  onLegStatusChange: (legIndex: number, status: BetLegStatus) => void;
+  onRemoveLeg: (legIndex: number) => void;
+}
+
+const LegSelectionRow = React.memo<LegSelectionRowProps>(({
+  leg,
+  idx,
+  options,
+  onMarketChange,
+  onTimeChange,
+  onLegStatusChange,
+  onRemoveLeg,
+}) => {
+  const matchScore = leg.score?.ft;
+  const hasScore = matchScore && matchScore.length === 2;
+
+  return (
+    <div className="bg-[#1a1a22] border border-[#2e2e3c] rounded-xl p-3 space-y-2.5 shadow-xs">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <span className="w-5 h-5 rounded-full bg-[#242432] border border-zinc-700 text-zinc-300 text-[10px] font-black flex items-center justify-center shrink-0">
+            {idx + 1}
+          </span>
+
+          <MatchupPill
+            team1={leg.team1}
+            team2={leg.team2}
+            team1Id={leg.team1Id}
+            team2Id={leg.team2Id}
+            time={leg.time || '16:00'}
+          />
+          
+          {hasScore && (
+            <span className={`text-[10px] font-black px-2 py-0.5 rounded border shrink-0 ${
+              leg.matchStatus === 'finished'
+                ? 'bg-zinc-800 text-zinc-200 border-zinc-700'
+                : leg.matchStatus === 'live'
+                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-700'
+                : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+            }`}>
+              {matchScore[0]} - {matchScore[1]} {leg.matchStatus === 'finished' ? '• Fim' : leg.matchStatus === 'live' ? '• Ao Vivo' : ''}
+            </span>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onRemoveLeg(idx)}
+          className="p-1 text-zinc-500 hover:text-rose-400 transition-colors cursor-pointer"
+          title="Remover partida"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1.5 border-t border-[#272734]">
+        <div>
+          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+            Mercado Apostado (5 Opções)
+          </label>
+          <select
+            value={leg.market || 'OVER_1_5'}
+            onChange={(e) => onMarketChange(idx, e.target.value)}
+            className="w-full bg-[#121216] border border-[#30303e] focus:border-emerald-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-100 font-semibold outline-none cursor-pointer"
+          >
+            {options.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+            Horário do Jogo
+          </label>
+          <input
+            type="text"
+            value={leg.time || '16:00'}
+            onChange={(e) => onTimeChange(idx, e.target.value)}
+            className="w-full bg-[#121216] border border-[#30303e] focus:border-emerald-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-100 font-bold outline-none"
+            placeholder="16:00"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+            Resultado
+          </label>
+          <select
+            value={leg.status || 'pending'}
+            onChange={(e) => onLegStatusChange(idx, e.target.value as BetLegStatus)}
+            className={`w-full bg-[#121216] border rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none cursor-pointer ${
+              leg.status === 'green'
+                ? 'text-emerald-400 border-emerald-500/50'
+                : leg.status === 'red'
+                ? 'text-rose-400 border-rose-500/50'
+                : leg.status === 'void'
+                ? 'text-zinc-300 border-zinc-600'
+                : 'text-amber-400 border-amber-500/50'
+            }`}
+          >
+            <option value="green" className="bg-[#18181c] text-emerald-400 font-bold">
+              🟢 Green (Acertou)
+            </option>
+            <option value="red" className="bg-[#18181c] text-rose-400 font-bold">
+              🔴 Red (Errou)
+            </option>
+            <option value="pending" className="bg-[#18181c] text-amber-400 font-bold">
+              🟡 Pendente
+            </option>
+            <option value="void" className="bg-[#18181c] text-zinc-300 font-bold">
+              ⚪ Anulada / Reembolsada
+            </option>
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 export const BetModal: React.FC<BetModalProps> = ({
   isOpen,
   onClose,
@@ -92,7 +397,7 @@ export const BetModal: React.FC<BetModalProps> = ({
   const [legs, setLegs] = useState<BetLeg[]>([]);
   const [internalRawMatches, setInternalRawMatches] = useState<Record<number, MatchItem[]>>({});
   const [showAllDayMatches, setShowAllDayMatches] = useState<boolean>(false);
-  const [quickFilter, setQuickFilter] = useState<'foguinho' | 'derrota' | null>(null);
+  const [quickFilter, setQuickFilter] = useState<'foguinho' | null>(null);
   const [fireCountFilter, setFireCountFilter] = useState<number>(0); // 0 = todos, 2 = 2 foguinhos, 3 = 3 foguinhos
   const [oddsAvailability, setOddsAvailability] = useState<Record<string | number, { bet365: boolean; betano: boolean }>>({});
   const fetchedTeamsRef = React.useRef<Set<number>>(new Set());
@@ -179,52 +484,6 @@ export const BetModal: React.FC<BetModalProps> = ({
     setIsDeleting(false);
   }, [initialBet, isOpen, selectedDate]);
 
-  // Sync legs when selectedMatchIds changes from allAvailableMatches
-  useEffect(() => {
-    if (selectedMatchIds.length > 0 && allAvailableMatches.length > 0) {
-      const selectedList = allAvailableMatches.filter((m) => selectedMatchIds.includes(m.id));
-      setLegs((prevLegs) => {
-        const nextLegs: BetLeg[] = selectedList.map((m) => {
-          const existing = prevLegs.find((l) => l.id === m.id || l.matchId === m.id);
-          const official = resolveOfficialMatchResult(m, allAvailableMatches, combinedRawMatches);
-          const defaultMarket = existing?.market || 'OVER_1_5';
-          const meta = getMarketMetadata(defaultMarket, m.team1, m.team2);
-          const autoStatus = evaluateLegResult(defaultMarket, official.homeScore, official.awayScore, official.status);
-          const isFinished = official.isFinished;
-          const settledScore: [number, number] | null =
-            isFinished && official.homeScore !== undefined && official.awayScore !== undefined
-              ? [official.homeScore, official.awayScore]
-              : null;
-
-          return {
-            id: m.id,
-            matchId: official.matchId || m.id,
-            matchTitle: `${m.team1} x ${m.team2}`,
-            team1: m.team1,
-            team2: m.team2,
-            date: m.date || date,
-            market: defaultMarket,
-            marketLabel: meta.marketLabel,
-            line: meta.line,
-            targetSide: meta.targetSide,
-            status: autoStatus,
-            score: official.scoreObj || (m.score && m.score.ft ? { ft: m.score.ft } : null),
-            settledScore,
-            matchStatus: official.status || m.status || 'scheduled',
-            time: m.time,
-            league: (m as any).leagueName || (m as any).competition || (m as any).league || existing?.league || '',
-          };
-        });
-
-        // Automatically update bet status based on the legs
-        const nextFormat: BetFormat = nextLegs.length > 1 ? 'Múltipla' : 'Simples';
-        const autoBetStatus = evaluateBetStatusFromLegs(nextLegs, status, nextFormat);
-        setStatus(autoBetStatus);
-
-        return nextLegs;
-      });
-    }
-  }, [selectedMatchIds, allAvailableMatches, combinedRawMatches, date]);
 
   // Keep existing legs synchronized with latest official scores from all available sources
   useEffect(() => {
@@ -242,7 +501,7 @@ export const BetModal: React.FC<BetModalProps> = ({
   }, [allAvailableMatches, combinedRawMatches, initialBet]);
 
   // Handler to change the market for an individual leg
-  const handleMarketChange = (legIndex: number, newMarket: string) => {
+  const handleMarketChange = useCallback((legIndex: number, newMarket: string) => {
     setLegs((prevLegs) => {
       const nextLegs = [...prevLegs];
       const leg = nextLegs[legIndex];
@@ -279,10 +538,10 @@ export const BetModal: React.FC<BetModalProps> = ({
 
       return nextLegs;
     });
-  };
+  }, [allAvailableMatches, combinedRawMatches, status]);
 
   // Handler to manually change the result/status of an individual leg inside Editar Aposta
-  const handleLegStatusChange = (legIndex: number, newLegStatus: BetLegStatus) => {
+  const handleLegStatusChange = useCallback((legIndex: number, newLegStatus: BetLegStatus) => {
     setLegs((prevLegs) => {
       const nextLegs = [...prevLegs];
       const leg = nextLegs[legIndex];
@@ -305,15 +564,26 @@ export const BetModal: React.FC<BetModalProps> = ({
 
       return nextLegs;
     });
-  };
+  }, [status]);
+
+  // Handler to change time of an individual leg
+  const handleTimeChange = useCallback((legIndex: number, val: string) => {
+    setLegs((prevLegs) => {
+      const nextLegs = [...prevLegs];
+      if (!nextLegs[legIndex]) return prevLegs;
+      nextLegs[legIndex] = { ...nextLegs[legIndex], time: val };
+      return nextLegs;
+    });
+  }, []);
 
   // Handler to remove a single leg directly from the selections list
-  const handleRemoveLeg = (legIndex: number) => {
-    const legToRemove = legs[legIndex];
-    if (!legToRemove) return;
-    const targetId = legToRemove.matchId || legToRemove.id;
-    setSelectedMatchIds((prev) => prev.filter((id) => id !== targetId));
+  const handleRemoveLeg = useCallback((legIndex: number) => {
     setLegs((prevLegs) => {
+      const legToRemove = prevLegs[legIndex];
+      if (!legToRemove) return prevLegs;
+      const targetId = legToRemove.matchId || legToRemove.id;
+      setSelectedMatchIds((prev) => prev.filter((id) => id !== targetId));
+
       const nextLegs = prevLegs.filter((_, i) => i !== legIndex);
       const nextFormat: BetFormat = nextLegs.length > 1 ? 'Múltipla' : 'Simples';
       setFormat(nextFormat);
@@ -326,7 +596,7 @@ export const BetModal: React.FC<BetModalProps> = ({
       }
       return nextLegs;
     });
-  };
+  }, [status]);
 
   // Fetch matches whenever date changes
   useEffect(() => {
@@ -464,27 +734,18 @@ export const BetModal: React.FC<BetModalProps> = ({
       const resolvedFav1Id = fav1 ? fav1.id : m.team1Id;
       const emojis1 = resolvedFav1Id ? getTeamEmojis(fav1 ? fav1.name : m.team1, resolvedFav1Id) : [];
       const streakFire1 = getEndingFireStreak(emojis1);
-      const streakLoss1 = getEndingLossStreak(emojis1);
 
       const fav2 = findFavoriteClub(m.team2, m.team2Id);
       const isFav2 = !!fav2 || isTeamNameInFavorites(m.team2, activeFavList);
       const resolvedFav2Id = fav2 ? fav2.id : m.team2Id;
       const emojis2 = resolvedFav2Id ? getTeamEmojis(fav2 ? fav2.name : m.team2, resolvedFav2Id) : [];
       const streakFire2 = getEndingFireStreak(emojis2);
-      const streakLoss2 = getEndingLossStreak(emojis2);
 
-      // Rule: Match qualifies strictly if at least one favorite team qualifies for the method: 1 flame, 2 flames, or defeat
-      const fav1FireQualifies = isFav1 && (streakFire1 === 1 || streakFire1 === 2);
-      const fav1LossQualifies = isFav1 && streakLoss1 >= 1;
-      const fav1Qualifies = fav1FireQualifies || fav1LossQualifies;
-
-      const fav2FireQualifies = isFav2 && (streakFire2 === 1 || streakFire2 === 2);
-      const fav2LossQualifies = isFav2 && streakLoss2 >= 1;
-      const fav2Qualifies = fav2FireQualifies || fav2LossQualifies;
-
+      // Rule: Match qualifies strictly if at least one favorite team has the "Foguinho" (On Fire) status
+      const fav1FireQualifies = isFav1 && streakFire1 >= 1;
+      const fav2FireQualifies = isFav2 && streakFire2 >= 1;
       const hasFireStreak = fav1FireQualifies || fav2FireQualifies;
-      const hasLossStreak = fav1LossQualifies || fav2LossQualifies;
-      const qualifies = fav1Qualifies || fav2Qualifies;
+      const qualifies = hasFireStreak;
 
       return {
         match: m,
@@ -492,14 +753,11 @@ export const BetModal: React.FC<BetModalProps> = ({
         fav1,
         emojis1,
         streakFire1,
-        streakLoss1,
         isFav2,
         fav2,
         emojis2,
         streakFire2,
-        streakLoss2,
         hasFireStreak,
-        hasLossStreak,
         qualifies,
       };
     });
@@ -568,22 +826,20 @@ export const BetModal: React.FC<BetModalProps> = ({
     return matchesWithStreakInfo.filter((item) => item.qualifies);
   }, [matchesWithStreakInfo]);
 
-  // Matches filtrados estritamente pela regra do foguinho/derrota E excluindo jogos já usados em outros bilhetes da data
+  // Matches filtrados estritamente pela regra do foguinho E excluindo jogos já usados em outros bilhetes da data
   const streakMatches = React.useMemo(() => {
     return matchesWithStreakInfo
       .filter((item) => {
-        if (!item.qualifies) return false;
+        if (!item.qualifies || !item.hasFireStreak) return false;
         if (quickFilter === 'foguinho') {
-          if (!item.hasFireStreak) return false;
           if (fireCountFilter === 2) {
             return (item.isFav1 && item.streakFire1 === 2) || (item.isFav2 && item.streakFire2 === 2);
           }
           if (fireCountFilter === 3) {
-            return false;
+            return (item.isFav1 && item.streakFire1 >= 3) || (item.isFav2 && item.streakFire2 >= 3);
           }
           return true;
         }
-        if (quickFilter === 'derrota') return item.hasLossStreak;
         return true;
       })
       .filter((item) => !isMatchAlreadyUsedInOtherBet(item.match));
@@ -596,39 +852,25 @@ export const BetModal: React.FC<BetModalProps> = ({
     ).length;
   }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet]);
 
-  // Displayed match items (exibe estritamente apenas partidas que se qualificam para o método: 1 foguinho, 2 foguinhos ou derrota)
+  // Displayed match items (exibe estritamente apenas partidas que se qualificam para o status Foguinho)
   const displayedMatchItems = React.useMemo(() => {
-    if (showAllDayMatches) {
-      return matchesWithStreakInfo
-        .filter((item) => {
-          if (!item.qualifies) {
-            return false;
-          }
-          if (quickFilter === 'foguinho') {
-            if (!item.hasFireStreak) return false;
-            if (fireCountFilter === 2) {
-              return (item.isFav1 && item.streakFire1 === 2) || (item.isFav2 && item.streakFire2 === 2);
-            }
-            if (fireCountFilter === 3) {
-              return false;
-            }
-            return true;
-          }
-          if (quickFilter === 'derrota') return item.hasLossStreak;
-          return true;
-        })
-        .filter((item) => !isMatchAlreadyUsedInOtherBet(item.match))
-        .slice(0, 40);
-    }
     return streakMatches;
-  }, [showAllDayMatches, matchesWithStreakInfo, streakMatches, isMatchAlreadyUsedInOtherBet, quickFilter, fireCountFilter]);
+  }, [streakMatches]);
+
+  const displayedMatchIdsKey = React.useMemo(() => {
+    return streakMatches.map((item) => item.match.id).sort().join(',') + '_' + date;
+  }, [streakMatches, date]);
 
   // Carrega disponibilidade das casas de apostas (Bet365 / Betano para Total de Gols 1.5)
   useEffect(() => {
-    if (!isOpen || displayedMatchItems.length === 0) return;
+    if (!isOpen || streakMatches.length === 0) return;
     let isCancelled = false;
 
-    const matchesPayload = displayedMatchItems.map((item) => ({
+    // Apenas partidas que ainda não possuem status em cache
+    const missing = streakMatches.filter((item) => !oddsAvailability[item.match.id]);
+    if (missing.length === 0) return;
+
+    const matchesPayload = missing.map((item) => ({
       id: item.match.id,
       team1: item.match.team1,
       team2: item.match.team2,
@@ -657,40 +899,91 @@ export const BetModal: React.FC<BetModalProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [isOpen, displayedMatchItems, date]);
+  }, [isOpen, displayedMatchIdsKey]);
 
-  // Handle toggling a match in the selection (up to 5 matches)
-  const handleToggleMatch = (match: Match) => {
-    const isSelected = selectedMatchIds.includes(match.id);
-    let nextIds: string[];
+  // Pre-resolve official results for instant lookup
+  const officialResultsMap = React.useMemo(() => {
+    const map: Record<string, any> = {};
+    streakMatches.forEach((item) => {
+      map[item.match.id] = resolveOfficialMatchResult(item.match, allAvailableMatches, combinedRawMatches);
+    });
+    return map;
+  }, [streakMatches, allAvailableMatches, combinedRawMatches]);
 
-    if (isSelected) {
-      nextIds = selectedMatchIds.filter((id) => id !== match.id);
-    } else {
-      if (selectedMatchIds.length >= 5) {
-        alert('Você pode selecionar no máximo 5 jogos para uma aposta.');
-        return;
+  // Handle toggling a match in the selection (up to 5 matches) - Immediate synchronous execution
+  const handleToggleMatch = useCallback((match: Match) => {
+    setSelectedMatchIds((prevIds) => {
+      const isSelected = prevIds.includes(match.id);
+      let nextIds: string[];
+
+      if (isSelected) {
+        nextIds = prevIds.filter((id) => id !== match.id);
+      } else {
+        const matchItem = matchesWithStreakInfo.find((item) => String(item.match.id) === String(match.id));
+        if (!matchItem || !matchItem.hasFireStreak) {
+          return prevIds;
+        }
+        if (prevIds.length >= 5) {
+          alert('Você pode selecionar no máximo 5 jogos para uma aposta.');
+          return prevIds;
+        }
+        nextIds = [...prevIds, match.id];
       }
-      nextIds = [...selectedMatchIds, match.id];
-    }
 
-    setSelectedMatchIds(nextIds);
+      if (nextIds.length === 0) {
+        setTitle('');
+        setLegs([]);
+        return nextIds;
+      }
 
-    // Update Format & Title automatically, but DO NOT touch odd!
-    if (nextIds.length === 0) {
-      return;
-    }
+      const selectedList = allAvailableMatches.filter((m) => nextIds.includes(m.id));
+      const autoTitle = selectedList.map((m) => `${m.team1} x ${m.team2}`).join(' + ');
+      setTitle(autoTitle);
 
-    const selectedList = allAvailableMatches.filter((m) => nextIds.includes(m.id));
-    const autoTitle = selectedList.map((m) => `${m.team1} x ${m.team2}`).join(' + ');
-    setTitle(autoTitle);
+      const nextFormat: BetFormat = nextIds.length > 1 ? 'Múltipla' : 'Simples';
+      setFormat(nextFormat);
 
-    if (nextIds.length === 1) {
-      setFormat('Simples');
-    } else {
-      setFormat('Múltipla');
-    }
-  };
+      setLegs((prevLegs) => {
+        const nextLegs: BetLeg[] = selectedList.map((m) => {
+          const existing = prevLegs.find((l) => l.id === m.id || l.matchId === m.id);
+          const official = resolveOfficialMatchResult(m, allAvailableMatches, combinedRawMatches);
+          const defaultMarket = existing?.market || 'OVER_1_5';
+          const meta = getMarketMetadata(defaultMarket, m.team1, m.team2);
+          const autoStatus = evaluateLegResult(defaultMarket, official.homeScore, official.awayScore, official.status);
+          const isFinished = official.isFinished;
+          const settledScore: [number, number] | null =
+            isFinished && official.homeScore !== undefined && official.awayScore !== undefined
+              ? [official.homeScore, official.awayScore]
+              : null;
+
+          return {
+            id: m.id,
+            matchId: official.matchId || m.id,
+            matchTitle: `${m.team1} x ${m.team2}`,
+            team1: m.team1,
+            team2: m.team2,
+            date: m.date || date,
+            market: defaultMarket,
+            marketLabel: meta.marketLabel,
+            line: meta.line,
+            targetSide: meta.targetSide,
+            status: autoStatus,
+            score: official.scoreObj || (m.score && m.score.ft ? { ft: m.score.ft } : null),
+            settledScore,
+            matchStatus: official.status || m.status || 'scheduled',
+            time: m.time,
+            league: (m as any).leagueName || (m as any).competition || (m as any).league || existing?.league || '',
+          };
+        });
+
+        const autoBetStatus = evaluateBetStatusFromLegs(nextLegs, status, nextFormat);
+        setStatus(autoBetStatus);
+        return nextLegs;
+      });
+
+      return nextIds;
+    });
+  }, [matchesWithStreakInfo, allAvailableMatches, combinedRawMatches, date, status]);
 
   if (!isOpen) return null;
 
@@ -812,7 +1105,7 @@ export const BetModal: React.FC<BetModalProps> = ({
             </div>
           </div>
 
-          {/* DYNAMIC SYNC SECTION: JOGOS DOS TIMES FAVORITOS COM FOGUINHO (UNDER 1.5) E DERROTAS (🔻) */}
+          {/* DYNAMIC SYNC SECTION: JOGOS DOS TIMES FAVORITOS COM FOGUINHO (UNDER 1.5) */}
           <div className="bg-[#151518] border border-[#26262e] rounded-xl p-3 sm:p-4 space-y-3">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 pb-1 border-b border-[#26262e]">
               <div className="flex items-center gap-1.5 text-xs font-extrabold text-amber-400 uppercase tracking-wider">
@@ -870,21 +1163,6 @@ export const BetModal: React.FC<BetModalProps> = ({
                   )}
                 </div>
 
-                {/* Filtro Derrota */}
-                <button
-                  type="button"
-                  onClick={() => setQuickFilter((prev) => (prev === 'derrota' ? null : 'derrota'))}
-                  className={`h-7 px-2 rounded-lg text-xs font-black flex items-center gap-1 transition-all select-none active:scale-95 cursor-pointer border ${
-                    quickFilter === 'derrota'
-                      ? 'bg-rose-950/60 text-rose-300 border-rose-500 shadow-sm shadow-rose-500/25'
-                      : 'bg-[#1d1d24] text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:border-zinc-700'
-                  }`}
-                  title="Filtrar por sequência de Derrota (🔻)"
-                >
-                  <span>🔻</span>
-                  <span className="text-[10px] font-bold">Derrota</span>
-                </button>
-
                 {hiddenMatchesCount > 0 && (
                   <span
                     className="text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full flex items-center gap-1 shrink-0"
@@ -921,249 +1199,37 @@ export const BetModal: React.FC<BetModalProps> = ({
                     </div>
                     <p className="text-[11px] text-zinc-400 leading-relaxed">
                       Para não repetir jogos no mesmo dia, os {hiddenMatchesCount}{' '}
-                      {hiddenMatchesCount === 1 ? 'jogo anterior foi ocultado' : 'jogos anteriores foram ocultados'}. Você pode selecionar outra data acima, adicionar um confronto manual ou ver todos os demais jogos do dia.
+                      {hiddenMatchesCount === 1 ? 'jogo anterior foi ocultado' : 'jogos anteriores foram ocultados'}. Você pode selecionar outra data acima ou adicionar um confronto manual.
                     </p>
                   </>
                 ) : (
                   <div className="flex items-center justify-center gap-2 text-xs font-bold text-zinc-300 py-1">
-                    {quickFilter === 'foguinho' ? (
+                    {quickFilter === 'foguinho' && fireCountFilter > 0 ? (
                       <span>
                         {fireCountFilter === 2
                           ? 'Nenhum clube favorito com sequência de 2 foguinhos para esta data.'
-                          : fireCountFilter === 3
-                          ? 'Nenhum clube favorito com sequência de 3 foguinhos para esta data.'
-                          : 'Nenhum clube favorito com método do Foguinho para esta data.'}
+                          : 'Nenhum clube favorito com sequência de 3+ foguinhos para esta data.'}
                       </span>
-                    ) : quickFilter === 'derrota' ? (
-                      <span>Nenhum clube favorito com sequência de Derrota para esta data.</span>
                     ) : (
-                      <span>Nenhum clube favorito para esta data.</span>
+                      <span>Nenhum clube favorito com status Foguinho para esta data.</span>
                     )}
-                  </div>
-                )}
-                {dayMatches.length > 0 && (
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowAllDayMatches(true)}
-                      className="text-[10px] font-bold text-amber-400 hover:text-amber-300 underline cursor-pointer"
-                    >
-                      Exibir todas as partidas do dia ({dayMatches.length} jogos)
-                    </button>
                   </div>
                 )}
               </div>
             ) : (
               <div className="space-y-2">
-                {showAllDayMatches && (
-                  <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-300">
-                    <span>Exibindo todos os jogos do dia (filtro de sequências desativado temporariamente)</span>
-                    <button
-                      type="button"
-                      onClick={() => setShowAllDayMatches(false)}
-                      className="font-bold underline cursor-pointer text-white hover:text-amber-200 ml-2"
-                    >
-                      Voltar para apenas 🔥 e 🔻
-                    </button>
-                  </div>
-                )}
 
                 <div className="grid grid-cols-1 gap-2 max-h-64 overflow-y-auto pr-1">
-                  {displayedMatchItems.map((item, idx) => {
-                    const m = item.match;
-                    const isChecked = selectedMatchIds.includes(m.id);
-
-                    return (
-                      <div
-                        key={`${m.id}_${idx}`}
-                        onClick={() => handleToggleMatch(m)}
-                        className={`p-2.5 rounded-xl border transition-all cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-left ${
-                          isChecked
-                            ? 'bg-emerald-950/40 border-emerald-500 shadow-sm'
-                            : 'bg-[#1a1a20] hover:bg-[#22222a] border-[#292934]'
-                        }`}
-                      >
-                        <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
-                          {/* Checkbox indicator */}
-                          <div
-                            className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 mt-0.5 sm:mt-0 transition-colors ${
-                              isChecked
-                                ? 'bg-emerald-500 border-emerald-400 text-black'
-                                : 'border-zinc-600 bg-[#25252e]'
-                            }`}
-                          >
-                            {isChecked && <Check className="w-3 h-3 stroke-[3]" />}
-                          </div>
-
-                          {/* Teams & Fire / Loss Details */}
-                          <div className="flex flex-col min-w-0 flex-1">
-                            {/* Confrontation Line */}
-                            <div className="flex items-center gap-1.5 text-xs font-bold text-white flex-wrap">
-                              {/* Team 1 */}
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <TeamCrest teamName={m.team1} teamId={m.team1Id} size={16} />
-                                <span
-                                  className={
-                                    item.isFav1
-                                      ? 'text-[#ccff00] font-black flex items-center gap-1'
-                                      : 'text-zinc-100'
-                                  }
-                                >
-                                  {item.isFav1 && (
-                                    <span className="text-amber-400 font-normal shrink-0">★</span>
-                                  )}
-                                  <span>{m.team1}</span>
-                                </span>
-
-                                {item.streakFire1 >= 1 && (
-                                  <span
-                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-amber-500/15 border border-amber-500/30 text-[9px] font-black text-amber-400 shrink-0"
-                                    title={`Último(s) jogo(s) Under 1.5: ${item.streakFire1} em sequência`}
-                                  >
-                                    <span>🔥</span>
-                                    <span>{item.streakFire1 === 1 ? '1 foguinho' : `${item.streakFire1} foguinhos`}</span>
-                                  </span>
-                                )}
-
-                                {item.streakLoss1 >= 1 && (
-                                  <span
-                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-rose-500/15 border border-rose-500/30 text-[9px] font-black text-rose-400 shrink-0"
-                                    title={`Último(s) jogo(s) Derrota: ${item.streakLoss1} em sequência`}
-                                  >
-                                    <span>🔻</span>
-                                    <span>{item.streakLoss1 === 1 ? '1 derrota' : `${item.streakLoss1} derrotas`}</span>
-                                  </span>
-                                )}
-                              </div>
-
-                              <span className="text-zinc-500 text-[10px] font-normal mx-0.5 shrink-0">vs</span>
-
-                              {/* Team 2 */}
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <TeamCrest teamName={m.team2} teamId={m.team2Id} size={16} />
-                                <span
-                                  className={
-                                    item.isFav2
-                                      ? 'text-[#ccff00] font-black flex items-center gap-1'
-                                      : 'text-zinc-100'
-                                  }
-                                >
-                                  {item.isFav2 && (
-                                    <span className="text-amber-400 font-normal shrink-0">★</span>
-                                  )}
-                                  <span>{m.team2}</span>
-                                </span>
-
-                                {item.streakFire2 >= 1 && (
-                                  <span
-                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-amber-500/15 border border-amber-500/30 text-[9px] font-black text-amber-400 shrink-0"
-                                    title={`Último(s) jogo(s) Under 1.5: ${item.streakFire2} em sequência`}
-                                  >
-                                    <span>🔥</span>
-                                    <span>{item.streakFire2 === 1 ? '1 foguinho' : `${item.streakFire2} foguinhos`}</span>
-                                  </span>
-                                )}
-
-                                {item.streakLoss2 >= 1 && (
-                                  <span
-                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-rose-500/15 border border-rose-500/30 text-[9px] font-black text-rose-400 shrink-0"
-                                    title={`Último(s) jogo(s) Derrota: ${item.streakLoss2} em sequência`}
-                                  >
-                                    <span>🔻</span>
-                                    <span>{item.streakLoss2 === 1 ? '1 derrota' : `${item.streakLoss2} derrotas`}</span>
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-
-                            {/* Second Row: League, Time & Mini Form Emoji Sequence */}
-                            <div className="flex items-center gap-2 flex-wrap text-[10px] text-zinc-400 mt-1">
-                              <span>{m.leagueName || 'Liga'}</span>
-                              <span>•</span>
-                              <span>{m.time || '16:00'}</span>
-
-                              {/* Show form sequence for fav team with fire or loss */}
-                              {item.isFav1 && (item.streakFire1 >= 1 || item.streakLoss1 >= 1) && item.emojis1.length > 0 && (
-                                <div className="flex items-center gap-1 ml-auto sm:ml-2 bg-[#121216] px-1.5 py-0.5 rounded border border-[#292934]">
-                                  <span className="text-[9px] text-zinc-400 font-semibold">{m.team1}:</span>
-                                  <div className="flex items-center gap-0.5">
-                                    {item.emojis1.map((emo, eIdx) => (
-                                      <span key={eIdx} className="text-[9px]" title={emo === '🔥' ? 'Under 1.5' : emo === '🔻' ? 'Derrota' : emo}>
-                                        {emo}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
-                              {item.isFav2 && (item.streakFire2 >= 1 || item.streakLoss2 >= 1) && item.emojis2.length > 0 && (
-                                <div className="flex items-center gap-1 ml-auto sm:ml-2 bg-[#121216] px-1.5 py-0.5 rounded border border-[#292934]">
-                                  <span className="text-[9px] text-zinc-400 font-semibold">{m.team2}:</span>
-                                  <div className="flex items-center gap-0.5">
-                                    {item.emojis2.map((emo, eIdx) => (
-                                      <span key={eIdx} className="text-[9px]" title={emo === '🔥' ? 'Under 1.5' : emo === '🔻' ? 'Derrota' : emo}>
-                                        {emo}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Time pill & Bookmaker Badges */}
-                        <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
-                          {/* Tag Bet365 (exibida apenas se mercado de gols 1.5 estiver aberto) */}
-                          {oddsAvailability[m.id]?.bet365 && (
-                            <span
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-black tracking-tight bg-[#005a36] text-white shadow-sm border border-[#006e42]/60 select-none"
-                              title="Mercado Total de Gols 1.5 aberto na Bet365"
-                            >
-                              <span className="text-white font-bold">bet</span>
-                              <span className="text-[#ffdf1b] font-black ml-0.5">365</span>
-                            </span>
-                          )}
-
-                          {/* Tag Betano (exibida apenas se mercado de gols 1.5 estiver aberto) */}
-                          {oddsAvailability[m.id]?.betano && (
-                            <span
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-black italic tracking-tight bg-[#ea5400] text-white shadow-sm border border-[#ff661a]/60 select-none"
-                              title="Mercado Total de Gols 1.5 aberto na Betano"
-                            >
-                              Betano
-                            </span>
-                          )}
-
-                          {/* Official Score & Status / Time Badge */}
-                          {(() => {
-                            const official = resolveOfficialMatchResult(m, allAvailableMatches, combinedRawMatches);
-                            if (official.isFinished) {
-                              return (
-                                <span className="text-[10px] font-bold text-white bg-zinc-800/90 px-2 py-0.5 rounded border border-zinc-700 flex items-center gap-1 shrink-0">
-                                  <span>{official.scoreText || '0 - 0'}</span>
-                                  <span className="text-[9px] text-zinc-400 font-semibold">• FT</span>
-                                </span>
-                              );
-                            }
-                            if (official.isLive) {
-                              return (
-                                <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-700 flex items-center gap-1 animate-pulse shrink-0">
-                                  <span>{official.scoreText || '0 - 0'}</span>
-                                  <span className="text-[9px] text-emerald-300 font-bold">• AO VIVO</span>
-                                </span>
-                              );
-                            }
-                            return (
-                              <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/50 shrink-0">
-                                {m.time || '16:00'}
-                              </span>
-                            );
-                          })()}
-                        </div>
-                      </div>
-                    );
-                  })}
+                  {displayedMatchItems.map((item, idx) => (
+                    <MatchSelectionRow
+                      key={`${item.match.id}_${idx}`}
+                      item={item}
+                      isChecked={selectedMatchIds.includes(item.match.id)}
+                      odds={oddsAvailability[item.match.id]}
+                      official={officialResultsMap[item.match.id] || {}}
+                      onToggle={handleToggleMatch}
+                    />
+                  ))}
                 </div>
               </div>
             )}
@@ -1184,7 +1250,7 @@ export const BetModal: React.FC<BetModalProps> = ({
                     setLegs([]);
                     setTitle('');
                   }}
-                  className="text-[10px] text-zinc-400 hover:text-white transition-colors"
+                  className="text-[10px] text-zinc-400 hover:text-white transition-colors cursor-pointer"
                 >
                   Limpar seleção
                 </button>
@@ -1192,125 +1258,18 @@ export const BetModal: React.FC<BetModalProps> = ({
 
               <div className="space-y-2.5 max-h-72 overflow-y-auto pr-0.5">
                 {legs.map((leg, idx) => {
-                  const matchScore = leg.score?.ft;
-                  const hasScore = matchScore && matchScore.length === 2;
                   const options = getMarketOptionsForMatch(leg.team1, leg.team2);
-
                   return (
-                    <div
+                    <LegSelectionRow
                       key={`${leg.id || leg.matchId || 'leg'}_${idx}`}
-                      className="bg-[#1a1a22] border border-[#2e2e3c] rounded-xl p-3 space-y-2.5 shadow-xs"
-                    >
-                      {/* Top Row: Index + Confrontation Pill + Real Score + Remove button */}
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-wrap min-w-0">
-                          <span className="w-5 h-5 rounded-full bg-[#242432] border border-zinc-700 text-zinc-300 text-[10px] font-black flex items-center justify-center shrink-0">
-                            {idx + 1}
-                          </span>
-
-                          <MatchupPill
-                            team1={leg.team1}
-                            team2={leg.team2}
-                            team1Id={leg.team1Id}
-                            team2Id={leg.team2Id}
-                            time={leg.time || '16:00'}
-                          />
-                          
-                          {hasScore && (
-                            <span className={`text-[10px] font-black px-2 py-0.5 rounded border shrink-0 ${
-                              leg.matchStatus === 'finished'
-                                ? 'bg-zinc-800 text-zinc-200 border-zinc-700'
-                                : leg.matchStatus === 'live'
-                                ? 'bg-emerald-950/80 text-emerald-400 border-emerald-700'
-                                : 'bg-zinc-800 text-zinc-400 border-zinc-700'
-                            }`}>
-                              {matchScore[0]} - {matchScore[1]} {leg.matchStatus === 'finished' ? '• Fim' : leg.matchStatus === 'live' ? '• Ao Vivo' : ''}
-                            </span>
-                          )}
-                        </div>
-
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveLeg(idx)}
-                          className="p-1 text-zinc-500 hover:text-rose-400 transition-colors"
-                          title="Remover partida"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-
-                      {/* Bottom Row: 3 Markets selector + Time Editor + Auto Status badge */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1.5 border-t border-[#272734]">
-                        <div>
-                          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                            Mercado Apostado (5 Opções)
-                          </label>
-                          <select
-                            value={leg.market || 'OVER_1_5'}
-                            onChange={(e) => handleMarketChange(idx, e.target.value)}
-                            className="w-full bg-[#121216] border border-[#30303e] focus:border-emerald-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-100 font-semibold outline-none cursor-pointer"
-                          >
-                            {options.map((opt) => (
-                              <option key={opt.value} value={opt.value}>
-                                {opt.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                            Horário do Jogo
-                          </label>
-                          <input
-                            type="text"
-                            value={leg.time || '16:00'}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setLegs((prevLegs) => {
-                                const nextLegs = [...prevLegs];
-                                nextLegs[idx] = { ...nextLegs[idx], time: val };
-                                return nextLegs;
-                              });
-                            }}
-                            className="w-full bg-[#121216] border border-[#30303e] focus:border-emerald-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-100 font-bold outline-none"
-                            placeholder="16:00"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                            Resultado
-                          </label>
-                          <select
-                            value={leg.status || 'pending'}
-                            onChange={(e) => handleLegStatusChange(idx, e.target.value as BetLegStatus)}
-                            className={`w-full bg-[#121216] border rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none cursor-pointer ${
-                              leg.status === 'green'
-                                ? 'text-emerald-400 border-emerald-500/50'
-                                : leg.status === 'red'
-                                ? 'text-rose-400 border-rose-500/50'
-                                : leg.status === 'void'
-                                ? 'text-zinc-300 border-zinc-600'
-                                : 'text-amber-400 border-amber-500/50'
-                            }`}
-                          >
-                            <option value="green" className="bg-[#18181c] text-emerald-400 font-bold">
-                              🟢 Green (Acertou)
-                            </option>
-                            <option value="red" className="bg-[#18181c] text-rose-400 font-bold">
-                              🔴 Red (Errou)
-                            </option>
-                            <option value="pending" className="bg-[#18181c] text-amber-400 font-bold">
-                              🟡 Pendente
-                            </option>
-                            <option value="void" className="bg-[#18181c] text-zinc-300 font-bold">
-                              ⚪ Anulada / Reembolsada
-                            </option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
+                      leg={leg}
+                      idx={idx}
+                      options={options}
+                      onMarketChange={handleMarketChange}
+                      onTimeChange={handleTimeChange}
+                      onLegStatusChange={handleLegStatusChange}
+                      onRemoveLeg={handleRemoveLeg}
+                    />
                   );
                 })}
               </div>

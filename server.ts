@@ -809,34 +809,10 @@ app.post('/api/fotmob/batch-teams', async (req, res) => {
   }
 
   const results: Record<string | number, any[]> = {};
-  const missingTeams: { id?: number; name?: string }[] = [];
+  const chunkSize = 8;
 
-  // 1. Resolve immediately from disk/memory cache for sub-millisecond response
-  for (const t of teams) {
-    const tId = t.id ? Number(t.id) : 0;
-    const nameHint = t.name || '';
-    const norm = nameHint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-    const clean = norm.replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '').replace(/\s+/g, ' ').trim();
-
-    const cached = (tId && fileFavoriteMatchesCache[tId]) ||
-                   (norm && fileFavoriteMatchesCache[norm]) ||
-                   (clean && fileFavoriteMatchesCache[clean]) ||
-                   (tId && fileFavoriteMatchesCache[String(tId)]);
-
-    if (cached && Array.isArray(cached) && cached.length > 0) {
-      if (tId) results[tId] = cached;
-      if (t.id) results[t.id] = cached;
-      if (norm) results[norm] = cached;
-      if (clean) results[clean] = cached;
-    } else {
-      missingTeams.push(t);
-    }
-  }
-
-  // 2. Fetch missing teams safely in controlled concurrent chunks of 6 to prevent FotMob timeouts
-  const chunkSize = 6;
-  for (let i = 0; i < missingTeams.length; i += chunkSize) {
-    const chunk = missingTeams.slice(i, i + chunkSize);
+  for (let i = 0; i < teams.length; i += chunkSize) {
+    const chunk = teams.slice(i, i + chunkSize);
     await Promise.all(
       chunk.map(async (t) => {
         try {
@@ -849,10 +825,15 @@ app.post('/api/fotmob/batch-teams', async (req, res) => {
             }
           }
           if (tId && tId > 0) {
+            // Reuses the exact same live FotMob scraper function as /api/fotmob/team/:id with in-memory caching
             const data = await scrapeFotMobTeamFixtures(tId, 'team', false, nameHint);
             if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
               results[tId] = data.pastMatches;
-              if (t.id) results[t.id] = data.pastMatches;
+              results[String(tId)] = data.pastMatches;
+              if (t.id) {
+                results[t.id] = data.pastMatches;
+                results[String(t.id)] = data.pastMatches;
+              }
               updateFavoriteMatchesCache(tId, data.pastMatches, data.teamName || nameHint);
               if (nameHint) {
                 const norm = nameHint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();

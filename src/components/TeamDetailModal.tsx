@@ -431,7 +431,7 @@ export const TeamDetailModal: React.FC<TeamDetailModalProps> = ({
                   {emojiSequence.length > 0 && (
                     <div
                       className="flex items-center gap-1.5 bg-[#18191f] px-2.5 py-1 rounded-lg border border-[#262833] shadow-xs"
-                      title="Sequência recente de resultados (da esquerda para direita: jogos anteriores até o mais recente)"
+                      title="Sequência recente de resultados (últimos 5 jogos)"
                     >
                       <span className="text-[10px] font-bold text-zinc-400 mr-0.5">Sequência:</span>
                       <div className="flex items-center gap-1 bg-[#121214] px-1.5 py-0.5 rounded border border-[#222226]">

@@ -59,7 +59,7 @@ const MONTH_NAMES = [
   'Dezembro',
 ];
 
-export const SimuladorBanca: React.FC<SimuladorBancaProps> = ({
+export const SimuladorBanca: React.FC<SimuladorBancaProps> = React.memo(({
   bets,
   realInitialCapital,
   realStats,
@@ -1187,4 +1187,5 @@ export const SimuladorBanca: React.FC<SimuladorBancaProps> = ({
       </div>
     </div>
   );
-};
+});
+

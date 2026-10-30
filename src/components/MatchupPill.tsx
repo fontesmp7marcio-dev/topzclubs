@@ -20,7 +20,7 @@ export interface MatchupPillProps {
  * Team crests are presented overlapping on the left, with full names stacked vertically.
  * High-legibility, standard app fonts, beautifully structured on both mobile and desktop.
  */
-export const MatchupPill: React.FC<MatchupPillProps> = ({
+export const MatchupPill: React.FC<MatchupPillProps> = React.memo(({
   team1,
   team2,
   team1Id,
@@ -122,4 +122,5 @@ export const MatchupPill: React.FC<MatchupPillProps> = ({
       </div>
     </div>
   );
-};
+});
+

@@ -10,7 +10,7 @@ interface TeamCrestProps {
   showFallbackText?: boolean;
 }
 
-export const TeamCrest: React.FC<TeamCrestProps> = ({
+export const TeamCrest: React.FC<TeamCrestProps> = React.memo(({
   teamName,
   teamId,
   size = 24,
@@ -76,4 +76,5 @@ export const TeamCrest: React.FC<TeamCrestProps> = ({
       style={{ width: `${size}px`, height: `${size}px` }}
     />
   );
-};
+});
+

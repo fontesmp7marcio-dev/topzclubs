@@ -133,7 +133,7 @@ interface TournamentGroup {
   matches: Match[];
 }
 
-export const MatchesCenterView: React.FC<MatchesCenterViewProps> = ({
+export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
   matches,
   selectedDate,
   onOpenCalendar,
@@ -857,4 +857,5 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = ({
 
     </div>
   );
-};
+});
+

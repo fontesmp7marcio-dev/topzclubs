@@ -124,7 +124,70 @@ const PRINCIPAIS_LIGAS = [
   },
 ];
 
-export const LeftSidebar: React.FC<LeftSidebarProps> = ({
+interface CountryAccordionItemProps {
+  country: any;
+  isExpanded: boolean;
+  onToggle: (code: string) => void;
+  onSelect: (subLeague: any, countryName: string, ccode?: string) => void;
+  selectedLeagueFotmobId?: number;
+}
+
+const CountryAccordionItem = React.memo<CountryAccordionItemProps>(({
+  country,
+  isExpanded,
+  onToggle,
+  onSelect,
+  selectedLeagueFotmobId,
+}) => {
+  const code = country.ccode || country.name;
+  return (
+    <div className="flex flex-col">
+      <button
+        id={`btn-country-accordion-${(country.ccode || country.name).toLowerCase()}`}
+        onClick={() => onToggle(code)}
+        className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs text-zinc-300 hover:bg-[#1a1a1a] hover:text-white transition-colors group cursor-pointer"
+      >
+        <div className="flex items-center gap-2.5 truncate">
+          <div className="w-4 h-4 rounded-full overflow-hidden flex items-center justify-center shrink-0 bg-zinc-800 border border-zinc-700/50">
+            <CountryFlag ccode={country.ccode} name={country.name} size={16} />
+          </div>
+          <span className="truncate">{country.localizedName || country.name}</span>
+        </div>
+        
+        <ChevronRight
+          className={`w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-300 transition-transform duration-150 ${
+            isExpanded ? 'rotate-90' : ''
+          }`}
+        />
+      </button>
+
+      {/* Sub-leagues list */}
+      {isExpanded && (
+        <div className="pl-7 pr-1 py-1 flex flex-col gap-0.5 border-l border-zinc-800 ml-4 my-0.5">
+          {(country.leagues || []).map((subLeague: any) => {
+            const isSubSelected = selectedLeagueFotmobId === subLeague.id;
+            return (
+              <button
+                key={subLeague.id}
+                id={`btn-subleague-${subLeague.id}`}
+                onClick={() => onSelect(subLeague, country.name, country.ccode)}
+                className={`w-full text-left px-2 py-1 rounded text-[11px] truncate transition-colors cursor-pointer ${
+                  isSubSelected
+                    ? 'bg-[#222222] text-emerald-400 font-semibold'
+                    : 'text-zinc-400 hover:text-white hover:bg-[#1a1a1a]'
+                }`}
+              >
+                {subLeague.localizedName || subLeague.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+});
+
+export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({
   selectedLeague,
   onSelectLeague,
   allLeaguesData,
@@ -141,14 +204,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   });
   const [isAllLeaguesCollapsed, setIsAllLeaguesCollapsed] = useState(false);
 
-  const toggleCountry = (code: string) => {
+  const toggleCountry = React.useCallback((code: string) => {
     setExpandedCountries((prev) => ({
       ...prev,
       [code]: !prev[code],
     }));
-  };
+  }, []);
 
-  const handleSelect = (leagueItem: any, countryName: string, ccode?: string) => {
+  const handleSelect = React.useCallback((leagueItem: any, countryName: string, ccode?: string) => {
     const isFotmobItem = typeof leagueItem.id === 'number';
     const pageUrlParts = (leagueItem.pageUrl || '').split('/').filter(Boolean);
     const resolvedSlug = leagueItem.slug || (pageUrlParts.length > 0 ? pageUrlParts[pageUrlParts.length - 1] : 'overview');
@@ -167,7 +230,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
     };
     onSelectLeague(leagueOpt);
     if (onCloseMobile) onCloseMobile();
-  };
+  }, [onSelectLeague, onCloseMobile]);
 
   // Fallback / curated countries if API is loading
   const fallbackCountries = useMemo(() => [
@@ -320,7 +383,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         {!isAllLeaguesCollapsed && (
           <div className="mt-2 flex flex-col gap-2">
             
-            {/* Filter search input matching Screenshot 4 */}
+            {/* Filter search input */}
             <div className="relative w-full">
               <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -336,51 +399,17 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             {/* Countries & Leagues Accordion List */}
             <div className="flex flex-col gap-0.5 max-h-[calc(100vh-180px)] min-h-[480px] overflow-y-auto pr-1">
               {countriesToDisplay.map((country: any) => {
-                const isExpanded = !!expandedCountries[country.ccode || country.name];
+                const code = country.ccode || country.name;
+                const isExpanded = !!expandedCountries[code];
                 return (
-                  <div key={country.ccode || country.name} className="flex flex-col">
-                    <button
-                      id={`btn-country-accordion-${(country.ccode || country.name).toLowerCase()}`}
-                      onClick={() => toggleCountry(country.ccode || country.name)}
-                      className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs text-zinc-300 hover:bg-[#1a1a1a] hover:text-white transition-colors group cursor-pointer"
-                    >
-                      <div className="flex items-center gap-2.5 truncate">
-                        <div className="w-4 h-4 rounded-full overflow-hidden flex items-center justify-center shrink-0 bg-zinc-800 border border-zinc-700/50">
-                          <CountryFlag ccode={country.ccode} name={country.name} size={16} />
-                        </div>
-                        <span className="truncate">{country.localizedName || country.name}</span>
-                      </div>
-                      
-                      <ChevronRight
-                        className={`w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-300 transition-transform duration-150 ${
-                          isExpanded ? 'rotate-90' : ''
-                        }`}
-                      />
-                    </button>
-
-                    {/* Sub-leagues list */}
-                    {isExpanded && (
-                      <div className="pl-7 pr-1 py-1 flex flex-col gap-0.5 border-l border-zinc-800 ml-4 my-0.5">
-                        {(country.leagues || []).map((subLeague: any) => {
-                          const isSubSelected = selectedLeague?.fotmobId === subLeague.id;
-                          return (
-                            <button
-                              key={subLeague.id}
-                              id={`btn-subleague-${subLeague.id}`}
-                              onClick={() => handleSelect(subLeague, country.name, country.ccode)}
-                              className={`w-full text-left px-2 py-1 rounded text-[11px] truncate transition-colors cursor-pointer ${
-                                isSubSelected
-                                  ? 'bg-[#222222] text-emerald-400 font-semibold'
-                                  : 'text-zinc-400 hover:text-white hover:bg-[#1a1a1a]'
-                              }`}
-                            >
-                              {subLeague.localizedName || subLeague.name}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
+                  <CountryAccordionItem
+                    key={code}
+                    country={country}
+                    isExpanded={isExpanded}
+                    onToggle={toggleCountry}
+                    onSelect={handleSelect}
+                    selectedLeagueFotmobId={selectedLeague?.fotmobId}
+                  />
                 );
               })}
             </div>
@@ -390,4 +419,4 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
     </aside>
   );
-};
+});

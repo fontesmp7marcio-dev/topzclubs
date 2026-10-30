@@ -76,7 +76,7 @@ export interface EnrichedLeg {
   emojis2?: string[];
 }
 
-export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = ({
+export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = React.memo(({
   bets,
   supabaseFavorites,
   teamForms,
@@ -1616,19 +1616,6 @@ ${topTeamsText || '  Nenhum clube com Red'}
                   <span>3+ 🔥</span>
                   <span className="text-[10px] text-zinc-400 font-bold">({methodCounts.fire3Plus})</span>
                 </button>
-
-                <button
-                  onClick={() => setSelectedMethod('loss')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMethod === 'loss'
-                      ? 'bg-rose-600 text-white border-rose-500 font-black shadow-xs'
-                      : 'bg-[#18181e] text-rose-400 border-[#2a2a34] hover:border-rose-500/40'
-                  }`}
-                  title="Partidas após derrota do time favorito (🔻 Red recente)"
-                >
-                  <span>🔻 Derrota</span>
-                  <span className="text-[10px] opacity-80 font-bold">({methodCounts.loss})</span>
-                </button>
               </div>
 
               {/* 3. Mercado Filter (Dupla Chance) */}
@@ -2061,4 +2048,5 @@ ${topTeamsText || '  Nenhum clube com Red'}
       </div>
     </div>
   );
-};
+});
+

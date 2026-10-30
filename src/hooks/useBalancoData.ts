@@ -7,7 +7,8 @@ const LOCAL_STORAGE_BANKROLL_KEY = 'topzclubs_balanco_bankroll_v1';
 
 export function useBalancoData(
   teamRawMatches?: Record<string | number, any[]>,
-  dateMatches?: Match[]
+  dateMatches?: Match[],
+  enabled = true
 ) {
   const [bets, setBets] = useState<BetItem[]>(() => {
     try {
@@ -38,6 +39,7 @@ export function useBalancoData(
 
   // Sync with Supabase on mount
   useEffect(() => {
+    if (!enabled) return;
     let isMounted = true;
     async function loadSupabaseData() {
       try {
@@ -66,16 +68,20 @@ export function useBalancoData(
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [enabled]);
 
-  // Save to localStorage on bets change
+  // Save to localStorage on bets change (debounced for 0ms UI lag)
   useEffect(() => {
-    try {
-      localStorage.setItem(LOCAL_STORAGE_BETS_KEY, JSON.stringify(bets));
-    } catch (e) {
-      console.warn('Error saving to localStorage:', e);
-    }
-  }, [bets]);
+    if (!enabled) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_BETS_KEY, JSON.stringify(bets));
+      } catch (e) {
+        console.warn('Error saving to localStorage:', e);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [bets, enabled]);
 
   // Save bankroll to localStorage
   useEffect(() => {
@@ -184,7 +190,7 @@ export function useBalancoData(
 
   // Synchronize automatically when teamRawMatches or dateMatches receive new finalized results
   useEffect(() => {
-    if (!bets || bets.length === 0) return;
+    if (!enabled || !bets || bets.length === 0) return;
     const hasUnfinishedBets = bets.some(
       (b) =>
         b.status === 'Pendente' ||
@@ -194,12 +200,16 @@ export function useBalancoData(
       hasUnfinishedBets &&
       ((dateMatches && dateMatches.length > 0) || (teamRawMatches && Object.keys(teamRawMatches).length > 0))
     ) {
-      handleSyncAllMatchResults(true);
+      const timer = setTimeout(() => {
+        handleSyncAllMatchResults(true);
+      }, 500);
+      return () => clearTimeout(timer);
     }
-  }, [teamRawMatches, dateMatches]);
+  }, [teamRawMatches, dateMatches, enabled]);
 
   // Periodic background sync for active/pending bets (every 60s)
   useEffect(() => {
+    if (!enabled) return;
     const hasActiveBets = bets.some(
       (b) =>
         b.status === 'Pendente' ||
@@ -212,7 +222,7 @@ export function useBalancoData(
     }, 60000);
 
     return () => clearInterval(timer);
-  }, [bets]);
+  }, [bets, enabled]);
 
   const handleSaveBet = async (bet: BetItem) => {
     const calculatedProfit = calculateBetProfit(bet.status, bet.amount, bet.odd);
