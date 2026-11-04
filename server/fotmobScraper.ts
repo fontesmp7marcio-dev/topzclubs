@@ -181,6 +181,7 @@ export interface FotMobLeagueResult {
 }
 
 const memoryCache = new Map<string, { data: any; timestamp: number }>();
+const inFlightRequests = new Map<string, Promise<any>>();
 const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes cache for fast response and gentle crawling
 
 const HEADERS = {
@@ -386,12 +387,12 @@ export async function scrapeFotMobLeague(leagueId: number, slug: string, forceRe
         }
 
         let status: 'finished' | 'live' | 'scheduled' | 'postponed' | 'halftime' = 'scheduled';
-        if (m.status?.finished) {
+        if (m.status?.cancelled || m.status?.reason?.short === 'Canc' || m.status?.reason?.short === 'Postp' || m.status?.reason?.short === 'Adia' || m.status?.reason?.short === 'Susp') {
+          status = 'postponed';
+        } else if (m.status?.finished || m.status?.reason?.short === 'FT' || m.status?.reason?.short === 'Pen' || m.status?.reason?.short === 'AET') {
           status = 'finished';
         } else if (m.status?.started && !m.status?.finished) {
           status = 'live';
-        } else if (m.status?.cancelled) {
-          status = 'postponed';
         }
 
         const utcTime = m.status?.utcTime || '';
@@ -789,6 +790,11 @@ export async function scrapeFotMobTeamFixtures(teamId: number, teamSlug = 'team'
     }
   }
 
+  if (inFlightRequests.has(cacheKey)) {
+    return inFlightRequests.get(cacheKey)!;
+  }
+
+  const fetchPromise = (async () => {
   const setInCache = (data: any) => {
     if (!data) return;
     if (teamId > 0) memoryCache.set(`fotmob:team-fixtures:${teamId}`, { data, timestamp: Date.now() });
@@ -865,7 +871,15 @@ export async function scrapeFotMobTeamFixtures(teamId: number, teamSlug = 'team'
     }
   }
 
-  return null;
+    return null;
+  })();
+
+  inFlightRequests.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRequests.delete(cacheKey);
+  }
 }
 
 export async function scrapeFotMobTodayMatches() {
@@ -920,111 +934,138 @@ export async function scrapeFotMobMatchesByDate(dateStr: string): Promise<any[]>
   const cleanDate = dateStr.replace(/-/g, ''); // YYYYMMDD
   const cacheKey = `fotmob:matches-by-date:${cleanDate}`;
   const cached = memoryCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) { // 5 min cache
+  if (cached && Date.now() - cached.timestamp < 3 * 60 * 1000) { // 3 min cache
     return cached.data;
   }
 
-  const url = `https://www.fotmob.com/api/data/matches?date=${cleanDate}&timezone=America%2FSao_Paulo&locale=pt-BR`;
-  try {
-    const res = await fetchWithTimeout(url, { headers: HEADERS }, 6500);
-    if (!res.ok) {
-      console.log(`[FotMob Scraper] Serving local matched clubs for date ${cleanDate}.`);
-      const fallback = await generateDynamicFallbackMatches(dateStr);
-      memoryCache.set(cacheKey, { data: fallback, timestamp: Date.now() });
-      return fallback;
-    }
+  // Deduplicate concurrent in-flight requests for the same date
+  if (inFlightRequests.has(cacheKey)) {
+    return inFlightRequests.get(cacheKey)!;
+  }
 
-    const data = await res.json();
-    const leagues = data.leagues || [];
-    
-    const mappedMatches: any[] = [];
-    for (const l of leagues) {
-      let leagueName = l.name || 'Liga';
-      const ccode = l.ccode || 'INT';
-      const leagueId = l.id || l.primaryId;
-
-      // Disambiguate generic 'Premier League' name for non-English leagues
-      if (leagueName === 'Premier League' && ccode !== 'ENG') {
-        if (ccode === 'RUS') leagueName = 'Russian Premier League';
-        else if (ccode === 'EGY') leagueName = 'Egyptian Premier League';
-        else if (ccode === 'ZAF') leagueName = 'Premier Soccer League';
-        else if (ccode === 'CAN') leagueName = 'Canadian Premier League';
-        else leagueName = `Premier League (${ccode})`;
-      }
-      
-      for (const m of (l.matches || [])) {
-        let status: 'scheduled' | 'live' | 'finished' = 'scheduled';
-        if (m.status?.finished || m.status?.reason?.short === 'FT' || m.status?.reason?.short === 'Pen' || m.status?.reason?.short === 'AET') {
-          status = 'finished';
-        } else if (m.status?.started && !m.status?.finished) {
-          status = 'live';
+  const fetchPromise = (async () => {
+    const url = `https://www.fotmob.com/api/data/matches?date=${cleanDate}&timezone=America%2FSao_Paulo&locale=pt-BR`;
+    try {
+      const res = await fetchWithTimeout(url, { headers: HEADERS }, 6500);
+      if (!res.ok) {
+        if (cached && cached.data) {
+          return cached.data;
         }
+        return [];
+      }
 
-        let score = null;
-        if (m.status?.scoreStr) {
-          const parts = m.status.scoreStr.split(/\s*[-:×x]\s*/);
-          if (parts.length === 2) {
-            const h = parseInt(parts[0], 10);
-            const a = parseInt(parts[1], 10);
+      const data = await res.json();
+      const leagues = data.leagues || [];
+      
+      const mappedMatches: any[] = [];
+      for (const l of leagues) {
+        let leagueName = l.name || 'Liga';
+        const ccode = l.ccode || 'INT';
+        const leagueId = l.id || l.primaryId;
+
+        // Disambiguate generic 'Premier League' name for non-English leagues
+        if (leagueName === 'Premier League' && ccode !== 'ENG') {
+          if (ccode === 'RUS') leagueName = 'Russian Premier League';
+          else if (ccode === 'EGY') leagueName = 'Egyptian Premier League';
+          else if (ccode === 'ZAF') leagueName = 'Premier Soccer League';
+          else if (ccode === 'CAN') leagueName = 'Canadian Premier League';
+          else leagueName = `Premier League (${ccode})`;
+        }
+        
+        for (const m of (l.matches || [])) {
+          let status: 'scheduled' | 'live' | 'finished' | 'postponed' = 'scheduled';
+          if (
+            m.status?.cancelled ||
+            m.status?.reason?.short === 'Canc' ||
+            m.status?.reason?.short === 'Postp' ||
+            m.status?.reason?.short === 'Adia' ||
+            m.status?.reason?.short === 'Susp'
+          ) {
+            status = 'postponed';
+          } else if (
+            m.status?.finished ||
+            m.status?.reason?.short === 'FT' ||
+            m.status?.reason?.short === 'Pen' ||
+            m.status?.reason?.short === 'AET'
+          ) {
+            status = 'finished';
+          } else if (m.status?.started && !m.status?.finished) {
+            status = 'live';
+          }
+
+          let score = null;
+          if (m.status?.scoreStr) {
+            const parts = m.status.scoreStr.split(/\s*[-:×x]\s*/);
+            if (parts.length === 2) {
+              const h = parseInt(parts[0], 10);
+              const a = parseInt(parts[1], 10);
+              if (!isNaN(h) && !isNaN(a)) {
+                score = { ft: [h, a] };
+              }
+            }
+          }
+          if (!score && m.home?.score !== undefined && m.away?.score !== undefined) {
+            const h = Number(m.home.score);
+            const a = Number(m.away.score);
             if (!isNaN(h) && !isNaN(a)) {
               score = { ft: [h, a] };
             }
           }
-        }
-        if (!score && m.home?.score !== undefined && m.away?.score !== undefined) {
-          const h = Number(m.home.score);
-          const a = Number(m.away.score);
-          if (!isNaN(h) && !isNaN(a)) {
-            score = { ft: [h, a] };
+
+          // Extract time from UTC or match local time
+          let time = '16:00';
+          if (m.status?.utcTime) {
+            const dt = new Date(m.status.utcTime);
+            time = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
+          } else if (m.time) {
+            const parts = m.time.split(' ');
+            time = parts.length > 1 ? parts[1] : m.time;
           }
+
+          const team1Name = m.home?.longName || m.home?.name || 'Time Mandante';
+          const team2Name = m.away?.longName || m.away?.name || 'Time Visitante';
+
+          if (isFemaleMatchInScraper(leagueName, team1Name, team2Name)) {
+            continue;
+          }
+
+          mappedMatches.push({
+            id: String(m.id),
+            round: m.roundName || m.tournamentStage || m.status?.reason?.short || 'Rodada',
+            date: dateStr,
+            time,
+            team1: team1Name,
+            team2: team2Name,
+            team1Id: m.home?.id,
+            team2Id: m.away?.id,
+            score,
+            status,
+            liveMinute: m.status?.liveTime?.short || (m.status?.reason?.short !== 'FT' ? m.status?.reason?.short : undefined),
+            stadium: m.status?.stadium || undefined,
+            leagueId,
+            leagueName,
+            countryCcode: ccode,
+            fotmobPageUrl: m.pageUrl,
+            isCup: isCupCompetition(leagueName, leagueId),
+          });
         }
-
-        // Extract time from UTC or match local time
-        let time = '16:00';
-        if (m.status?.utcTime) {
-          const dt = new Date(m.status.utcTime);
-          time = dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' });
-        } else if (m.time) {
-          const parts = m.time.split(' ');
-          time = parts.length > 1 ? parts[1] : m.time;
-        }
-
-        const team1Name = m.home?.longName || m.home?.name || 'Time Mandante';
-        const team2Name = m.away?.longName || m.away?.name || 'Time Visitante';
-
-        if (isFemaleMatchInScraper(leagueName, team1Name, team2Name)) {
-          continue;
-        }
-
-        mappedMatches.push({
-          id: String(m.id),
-          round: m.roundName || m.tournamentStage || m.status?.reason?.short || 'Rodada',
-          date: dateStr,
-          time,
-          team1: team1Name,
-          team2: team2Name,
-          team1Id: m.home?.id,
-          team2Id: m.away?.id,
-          score,
-          status,
-          liveMinute: m.status?.liveTime?.short || (m.status?.reason?.short !== 'FT' ? m.status?.reason?.short : undefined),
-          stadium: m.status?.stadium || undefined,
-          leagueId,
-          leagueName,
-          countryCcode: ccode,
-          fotmobPageUrl: m.pageUrl,
-          isCup: isCupCompetition(leagueName, leagueId),
-        });
       }
-    }
 
-    memoryCache.set(cacheKey, { data: mappedMatches, timestamp: Date.now() });
-    return mappedMatches;
-  } catch (err) {
-    console.log(`[FotMob Scraper] Serving offline matched clubs for date ${cleanDate}.`);
-    const fallback = await generateDynamicFallbackMatches(dateStr);
-    memoryCache.set(cacheKey, { data: fallback, timestamp: Date.now() });
-    return fallback;
+      memoryCache.set(cacheKey, { data: mappedMatches, timestamp: Date.now() });
+      return mappedMatches;
+    } catch (err) {
+      if (cached && cached.data) {
+        return cached.data;
+      }
+      return [];
+    }
+  })();
+
+  inFlightRequests.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRequests.delete(cacheKey);
   }
 }
 

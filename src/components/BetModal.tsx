@@ -211,13 +211,17 @@ const MatchSelectionRow = React.memo<MatchSelectionRowProps>(({
         {/* Official Score & Status / Time Badge */}
         {official.isFinished ? (
           <span className="text-[10px] font-bold text-white bg-zinc-800/90 px-2 py-0.5 rounded border border-zinc-700 flex items-center gap-1 shrink-0">
-            <span>{official.scoreText || '0 - 0'}</span>
+            <span>{official.scoreText || 'FT'}</span>
             <span className="text-[9px] text-zinc-400 font-semibold">• FT</span>
           </span>
         ) : official.isLive ? (
           <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-700 flex items-center gap-1 animate-pulse shrink-0">
             <span>{official.scoreText || '0 - 0'}</span>
             <span className="text-[9px] text-emerald-300 font-bold">• AO VIVO</span>
+          </span>
+        ) : official.isPostponed || m.status === 'postponed' ? (
+          <span className="text-[10px] font-bold text-amber-400 bg-amber-950/40 px-2 py-0.5 rounded border border-amber-800/50 shrink-0">
+            Adiado
           </span>
         ) : (
           <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/50 shrink-0">
@@ -598,9 +602,19 @@ export const BetModal: React.FC<BetModalProps> = ({
     });
   }, [status]);
 
-  // Fetch matches whenever date changes
+  // Fetch matches whenever date changes (reusing dateMatches from props if already available)
   useEffect(() => {
     if (!isOpen || !date) return;
+
+    if (dateMatches && dateMatches.length > 0 && selectedDate === date) {
+      const clean = dateMatches.filter(
+        (m: any) => !isFemaleOrWomensMatch(m.leagueName, m.team1, m.team2)
+      );
+      setDayMatches(clean);
+      setIsMatchesLoading(false);
+      return;
+    }
+
     let isCancelled = false;
     setIsMatchesLoading(true);
 
@@ -628,7 +642,7 @@ export const BetModal: React.FC<BetModalProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [date, isOpen]);
+  }, [date, isOpen, dateMatches, selectedDate]);
 
   // Helper to find a favorite club by name or ID
   const findFavoriteClub = React.useCallback(

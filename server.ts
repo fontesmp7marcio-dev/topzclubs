@@ -818,6 +818,25 @@ app.post('/api/fotmob/batch-teams', async (req, res) => {
         try {
           let tId = t.id ? Number(t.id) : 0;
           const nameHint = t.name || '';
+          const normHint = nameHint ? nameHint.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim() : '';
+
+          const existingMatches = (tId && fileFavoriteMatchesCache[tId]) || 
+                                  (tId && fileFavoriteMatchesCache[String(tId)]) || 
+                                  (normHint && fileFavoriteMatchesCache[normHint]);
+
+          if (existingMatches && Array.isArray(existingMatches) && existingMatches.length > 0) {
+            if (tId) {
+              results[tId] = existingMatches;
+              results[String(tId)] = existingMatches;
+            }
+            if (t.id) {
+              results[t.id] = existingMatches;
+              results[String(t.id)] = existingMatches;
+            }
+            if (normHint) results[normHint] = existingMatches;
+            return;
+          }
+
           if ((!tId || tId <= 0) && nameHint) {
             const searchRes = await searchFotMobTeam(nameHint);
             if (searchRes?.team?.id) {

@@ -425,14 +425,17 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
                   {/* Matches List */}
                   <div className="divide-y divide-[#1e1e1e]">
                     {group.matches.map((match, idx) => {
-                      const isLive = match.status === 'live' || !!match.liveMinute;
+                      const isLive = match.status === 'live' || (!!match.liveMinute && match.status !== 'finished' && match.status !== 'postponed');
                       const isFinished = match.status === 'finished';
-                      const isUpcoming = !isLive && !isFinished;
+                      const isPostponed = match.status === 'postponed';
+                      const isUpcoming = !isLive && !isFinished && !isPostponed;
 
                       // Visual card background based on match status:
-                      // Encerrado: Cinza escuro | Futuro: Cinza mais claro | Ao Vivo: Verde sutil e discreto
+                      // Encerrado: Cinza escuro | Futuro: Cinza mais claro | Ao Vivo: Verde sutil e discreto | Adiado: Âmbar discreto
                       const cardBgClass = isLive
                         ? 'bg-[#12241b] hover:bg-[#182c22] border-l-2 border-l-emerald-400'
+                        : isPostponed
+                        ? 'bg-[#1a1714] hover:bg-[#221e1a] border-l-2 border-l-amber-500/50'
                         : isFinished
                         ? 'bg-[#141414] hover:bg-[#1a1a1a]'
                         : 'bg-[#22242b] hover:bg-[#282a33]';
@@ -443,13 +446,16 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
                       const isFav1 = isTeamNameInFavorites(match.team1, activeFavList);
                       const isFav2 = isTeamNameInFavorites(match.team2, activeFavList);
 
-                      const emojis1 = isFav1
+                      // Requirement 3: On the main page, reverse the favorite club's recent results emoji sequence so the newest match appears on the far left.
+                      const rawEmojis1 = isFav1
                         ? getOrComputeTeamEmojis(match.team1, match.team1Id, teamForms, filters, activeFavList)
                         : [];
+                      const emojis1 = rawEmojis1.slice(0, filters.window || 5).reverse();
 
-                      const emojis2 = isFav2
+                      const rawEmojis2 = isFav2
                         ? getOrComputeTeamEmojis(match.team2, match.team2Id, teamForms, filters, activeFavList)
                         : [];
+                      const emojis2 = rawEmojis2.slice(0, filters.window || 5).reverse();
 
                       // Positions
                       const pos1 = (idx * 3 + 4) % 18 + 1;
@@ -477,10 +483,19 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
                               ) : isFinished ? (
                                 <>
                                   <span className="text-[11px] font-bold text-white tracking-tight">
-                                    {score1 ?? 0}×{score2 ?? 0}
+                                    {score1 !== null && score2 !== null ? `${score1}×${score2}` : 'FT'}
                                   </span>
                                   <span className="inline-block px-1 py-0.2 rounded text-[8px] font-bold text-zinc-300 bg-[#282828] border border-[#383838] mt-0.5">
                                     FT
+                                  </span>
+                                </>
+                              ) : isPostponed ? (
+                                <>
+                                  <span className="text-[10px] font-bold text-amber-400 tracking-tight">
+                                    ADIADO
+                                  </span>
+                                  <span className="inline-block px-1 py-0.2 rounded text-[8px] font-bold text-amber-300/80 bg-amber-950/40 border border-amber-800/40 mt-0.5">
+                                    POSTP
                                   </span>
                                 </>
                               ) : (
@@ -739,10 +754,22 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
                               ) : isFinished ? (
                                 <>
                                   <span className="text-xs font-bold text-white tracking-tight">
-                                    {score1 ?? 0} × {score2 ?? 0}
+                                    {score1 !== null && score2 !== null ? `${score1} × ${score2}` : 'FT'}
                                   </span>
                                   <span className="inline-block px-1.5 py-0.2 rounded text-[9px] font-bold text-zinc-300 bg-[#282828] border border-[#383838] mt-0.5">
                                     FT
+                                  </span>
+                                  <span className="text-[10px] text-zinc-500 mt-0.5">
+                                    {rowDateStr}
+                                  </span>
+                                </>
+                              ) : isPostponed ? (
+                                <>
+                                  <span className="text-xs font-bold text-amber-400 tracking-tight">
+                                    ADIADO
+                                  </span>
+                                  <span className="inline-block px-1.5 py-0.2 rounded text-[9px] font-bold text-amber-300/80 bg-amber-950/40 border border-amber-800/40 mt-0.5">
+                                    POSTP
                                   </span>
                                   <span className="text-[10px] text-zinc-500 mt-0.5">
                                     {rowDateStr}

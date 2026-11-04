@@ -13,9 +13,10 @@ export interface OfficialMatchResult {
   awayScore: number | undefined;
   scoreText: string | null; // e.g. "3 - 2"
   scoreObj: { ft: [number, number] } | null;
-  status: 'scheduled' | 'live' | 'finished';
+  status: 'scheduled' | 'live' | 'finished' | 'postponed';
   isFinished: boolean;
   isLive: boolean;
+  isPostponed?: boolean;
   matchId?: string;
   source: 'direct' | 'dateMatches' | 'teamRaw' | 'none';
 }
@@ -135,11 +136,25 @@ export function extractScoreFromMatch(m: any): { homeScore?: number; awayScore?:
 }
 
 /**
- * Normalizes match status across all formats into 'scheduled' | 'live' | 'finished'
+ * Normalizes match status across all formats into 'scheduled' | 'live' | 'finished' | 'postponed'
  */
-export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished' {
+export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished' | 'postponed' {
   if (!m) return 'scheduled';
   const s = String(m.status?.reason?.short || m.status || m.matchStatus || '').toLowerCase().trim();
+
+  if (
+    s === 'postponed' ||
+    s === 'cancelled' ||
+    s === 'canceled' ||
+    s === 'adiado' ||
+    s === 'canc' ||
+    s === 'postp' ||
+    s === 'adia' ||
+    s === 'susp' ||
+    m.isPostponed === true
+  ) {
+    return 'postponed';
+  }
 
   if (
     s === 'finished' ||
@@ -178,8 +193,8 @@ export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished
 
 /**
  * Single Source of Truth to resolve the official match result & score from:
- * 1) Provided matches list (e.g. dayMatches or dateMatches)
- * 2) teamRawMatches (verified past fixtures for favorite clubs)
+ * 1) Provided matches list (e.g. dayMatches or dateMatches from FotMob)
+ * 2) teamRawMatches (verified past fixtures for favorite clubs from FotMob)
  */
 export function resolveOfficialMatchResult(
   target: {
@@ -200,13 +215,13 @@ export function resolveOfficialMatchResult(
 ): OfficialMatchResult {
   const targetId = target.matchId ? String(target.matchId) : target.id ? String(target.id) : '';
 
-  // 1. Check in matches list
+  // 1. Check in matches list (FotMob daily feed)
   let matchFound = targetId ? matches.find((m) => String(m.id) === targetId) : undefined;
   if (!matchFound && target.team1 && target.team2) {
     matchFound = matches.find((m) => matchTeams(m.team1, m.team2, target.team1, target.team2));
   }
 
-  // 2. Check in teamRawMatches
+  // 2. Check in teamRawMatches (FotMob past finished fixtures)
   let rawMatchFound: any = undefined;
   if (teamRawMatches) {
     const allRaw = Object.values(teamRawMatches).flat();
@@ -225,9 +240,9 @@ export function resolveOfficialMatchResult(
 
   let homeScore: number | undefined;
   let awayScore: number | undefined;
-  let status: 'scheduled' | 'live' | 'finished' = 'scheduled';
+  let status: 'scheduled' | 'live' | 'finished' | 'postponed' = 'scheduled';
 
-  // Check candidate from matches list
+  // Check candidate from FotMob matches list (authoritative for date)
   if (matchFound) {
     const scores = extractScoreFromMatch(matchFound);
     homeScore = scores.homeScore;
@@ -235,33 +250,34 @@ export function resolveOfficialMatchResult(
     status = extractStatusFromMatch(matchFound);
   }
 
-  // Check candidate from teamRawMatches (especially for past verified results)
+  // Check candidate from teamRawMatches (for past verified results if not in current day matches or if rawMatch has definitive verified finished status)
   if (rawMatchFound) {
     const rawScores = extractScoreFromMatch(rawMatchFound);
-    if (rawScores.homeScore !== undefined && rawScores.awayScore !== undefined) {
+    const rawStatus = extractStatusFromMatch(rawMatchFound);
+    if (rawStatus === 'finished' && rawScores.homeScore !== undefined && rawScores.awayScore !== undefined) {
       homeScore = rawScores.homeScore;
       awayScore = rawScores.awayScore;
-    }
-    const rawStatus = extractStatusFromMatch(rawMatchFound);
-    if (rawStatus === 'finished') {
       status = 'finished';
-    } else if (rawStatus === 'live' && status !== 'finished') {
-      status = 'live';
+    } else if (!matchFound) {
+      if (rawScores.homeScore !== undefined && rawScores.awayScore !== undefined) {
+        homeScore = rawScores.homeScore;
+        awayScore = rawScores.awayScore;
+      }
+      status = rawStatus;
     }
   }
 
-  // Fallback to target itself if already populated
-  if (homeScore === undefined || awayScore === undefined) {
+  // Only if neither matchFound nor rawMatchFound was found in FotMob data, check target's existing fields
+  if (!matchFound && !rawMatchFound) {
     const targetScores = extractScoreFromMatch(target);
     homeScore = targetScores.homeScore;
     awayScore = targetScores.awayScore;
-    if (status === 'scheduled') {
-      status = extractStatusFromMatch(target);
-    }
+    status = extractStatusFromMatch(target);
   }
 
   const isFinished = status === 'finished';
   const isLive = status === 'live';
+  const isPostponed = status === 'postponed';
   const hasScore = typeof homeScore === 'number' && typeof awayScore === 'number';
 
   return {
@@ -272,6 +288,7 @@ export function resolveOfficialMatchResult(
     status,
     isFinished,
     isLive,
+    isPostponed,
     matchId: matchFound ? String(matchFound.id) : rawMatchFound ? String(rawMatchFound.id) : (targetId || undefined),
     source: matchFound ? (rawMatchFound ? 'direct' : 'dateMatches') : (rawMatchFound ? 'teamRaw' : 'none'),
   };
@@ -769,7 +786,7 @@ export function isLegCompleted(
     return false;
   }
 
-  // 3. If explicitly scheduled / not started, it is NOT completed
+  // 3. If explicitly scheduled / not started or postponed / cancelled, it is NOT completed
   if (
     ms === 'scheduled' ||
     ms === 'notstarted' ||
@@ -777,7 +794,15 @@ export function isLegCompleted(
     ms === 'fixture' ||
     ms === 'agendado' ||
     ms === 'programado' ||
-    ms === 'a iniciar'
+    ms === 'a iniciar' ||
+    ms === 'postponed' ||
+    ms === 'cancelled' ||
+    ms === 'canceled' ||
+    ms === 'adiado' ||
+    ms === 'canc' ||
+    ms === 'postp' ||
+    ms === 'adia' ||
+    ms === 'susp'
   ) {
     return false;
   }

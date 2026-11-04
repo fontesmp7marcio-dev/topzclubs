@@ -159,8 +159,11 @@ export default function App() {
         const dictId1 = getTeamId(name1) || getTeamId(m.team1);
         const id1 = m.team1Id || dictId1 || fav1?.id || 0;
         const norm1 = normalizeTeamName(name1);
+        const hasData1 = (id1 && teamRawMatches[id1] && teamRawMatches[id1].length > 0) || 
+                         (teamRawMatches[norm1] && teamRawMatches[norm1].length > 0) ||
+                         (dictId1 && teamRawMatches[dictId1] && teamRawMatches[dictId1].length > 0);
 
-        if (!fetchedFormsRef.current.has(norm1)) {
+        if (!fetchedFormsRef.current.has(norm1) && !hasData1) {
           fetchedFormsRef.current.add(norm1);
           if (id1) fetchedFormsRef.current.add(String(id1));
           teamsToFetch.push({ id: id1, name: name1 });
@@ -176,8 +179,11 @@ export default function App() {
         const dictId2 = getTeamId(name2) || getTeamId(m.team2);
         const id2 = m.team2Id || dictId2 || fav2?.id || 0;
         const norm2 = normalizeTeamName(name2);
+        const hasData2 = (id2 && teamRawMatches[id2] && teamRawMatches[id2].length > 0) || 
+                         (teamRawMatches[norm2] && teamRawMatches[norm2].length > 0) ||
+                         (dictId2 && teamRawMatches[dictId2] && teamRawMatches[dictId2].length > 0);
 
-        if (!fetchedFormsRef.current.has(norm2)) {
+        if (!fetchedFormsRef.current.has(norm2) && !hasData2) {
           fetchedFormsRef.current.add(norm2);
           if (id2) fetchedFormsRef.current.add(String(id2));
           teamsToFetch.push({ id: id2, name: name2 });
@@ -205,12 +211,10 @@ export default function App() {
       .catch((err) => {
         console.warn('[App] Error batch synchronizing sequence data:', err);
       });
-  }, [dateMatches, supabaseFavorites]);
+  }, [dateMatches, supabaseFavorites, teamRawMatches]);
 
   // Synchronized Dynamic Emoji Sequences:
-  // Dynamically calculates the exact emoji sequence for each favorite club using the active filters
-  // (Competition: League/Cup/All, Mando: Home/Away/All, Window: Last 5/Last 10)
-  // Maps by numeric ID, normalized name, lowercase name, and dictionary ID so any lookup succeeds seamlessly.
+  // Dynamically calculates the exact emoji sequence for active clubs using active filters
   const favoriteForms = useMemo(() => {
     const forms: Record<string | number, string[]> = {};
     const allFavList = [
@@ -229,16 +233,41 @@ export default function App() {
       return undefined;
     };
 
+    // Determine relevant clubs: those with actual matches in teamRawMatches or playing in dateMatches
+    const activeTeamsSet = new Set<string>();
+    if (dateMatches && dateMatches.length > 0) {
+      dateMatches.forEach((m) => {
+        if (m.team1) activeTeamsSet.add(normalizeTeamName(m.team1));
+        if (m.team2) activeTeamsSet.add(normalizeTeamName(m.team2));
+      });
+    }
+
     allFavList.forEach((fav) => {
-      const dictId = getTeamId(fav.name);
-      const effectiveId = fav.id || dictId || 10000;
-      const raw = findRawMatches(fav.name, fav.id) || generateFallbackTeamMatches(fav.name, effectiveId);
+      const norm = normalizeTeamName(fav.name);
+      const raw = findRawMatches(fav.name, fav.id);
+      const isPlayingToday = norm ? activeTeamsSet.has(norm) : false;
+
+      // Only compute if team has raw matches or is playing today
       if (raw && raw.length > 0) {
+        const dictId = getTeamId(fav.name);
+        const effectiveId = fav.id || dictId || 10000;
         const filtered = filterTeamPastMatches(raw, filters, fav.name, effectiveId);
         const emojis = calculateTeamEmojis(filtered, filters.window || 5);
         if (emojis.length > 0) {
           if (fav.id) forms[fav.id] = emojis;
-          const norm = normalizeTeamName(fav.name);
+          if (norm) forms[norm] = emojis;
+          const lower = fav.name.toLowerCase().trim();
+          if (lower) forms[lower] = emojis;
+          if (dictId) forms[dictId] = emojis;
+        }
+      } else if (isPlayingToday) {
+        const dictId = getTeamId(fav.name);
+        const effectiveId = fav.id || dictId || 10000;
+        const fallback = generateFallbackTeamMatches(fav.name, effectiveId);
+        const filtered = filterTeamPastMatches(fallback, filters, fav.name, effectiveId);
+        const emojis = calculateTeamEmojis(filtered, filters.window || 5);
+        if (emojis.length > 0) {
+          if (fav.id) forms[fav.id] = emojis;
           if (norm) forms[norm] = emojis;
           const lower = fav.name.toLowerCase().trim();
           if (lower) forms[lower] = emojis;

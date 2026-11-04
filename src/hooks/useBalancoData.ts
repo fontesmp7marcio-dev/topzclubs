@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { BetItem, Match } from '../types';
 import { calculateBankrollStats, calculateBetProfit, syncBetWithMatches } from '../utils/betSync';
 
@@ -36,6 +36,7 @@ export function useBalancoData(
 
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' } | null>(null);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const lastSyncRef = useRef<number>(0);
 
   // Sync with Supabase on mount
   useEffect(() => {
@@ -123,7 +124,9 @@ export function useBalancoData(
         }
       });
 
-      const datesToFetch: string[] = Array.from(datesSet);
+      // Filter out dates already covered by dateMatches to avoid redundant network requests
+      const coveredDates = new Set(dateMatches?.map((m) => m.date).filter(Boolean) || []);
+      const datesToFetch: string[] = Array.from(datesSet).filter((d) => !coveredDates.has(d));
 
       const matchesByDate: Record<string, Match[]> = {};
       if (datesToFetch.length > 0) {
@@ -188,7 +191,7 @@ export function useBalancoData(
     }
   };
 
-  // Synchronize automatically when teamRawMatches or dateMatches receive new finalized results
+  // Synchronize automatically when teamRawMatches or dateMatches receive new finalized results (throttled)
   useEffect(() => {
     if (!enabled || !bets || bets.length === 0) return;
     const hasUnfinishedBets = bets.some(
@@ -200,7 +203,10 @@ export function useBalancoData(
       hasUnfinishedBets &&
       ((dateMatches && dateMatches.length > 0) || (teamRawMatches && Object.keys(teamRawMatches).length > 0))
     ) {
+      const now = Date.now();
+      if (now - lastSyncRef.current < 8000) return;
       const timer = setTimeout(() => {
+        lastSyncRef.current = Date.now();
         handleSyncAllMatchResults(true);
       }, 500);
       return () => clearTimeout(timer);
