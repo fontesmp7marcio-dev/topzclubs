@@ -745,6 +745,18 @@ try {
   console.warn('[Cache] Could not load favoriteMatchesCache.json:', e);
 }
 
+let saveCacheTimeout: NodeJS.Timeout | null = null;
+function saveFavoriteMatchesCacheDebounced() {
+  if (saveCacheTimeout) clearTimeout(saveCacheTimeout);
+  saveCacheTimeout = setTimeout(() => {
+    try {
+      fs.writeFileSync(favoriteMatchesCachePath, JSON.stringify(fileFavoriteMatchesCache), 'utf-8');
+    } catch (e) {
+      console.warn('[Cache] Could not write favoriteMatchesCache.json:', e);
+    }
+  }, 2000);
+}
+
 function updateFavoriteMatchesCache(teamId: number | string, matches: any[], teamName?: string) {
   if (!matches || !Array.isArray(matches) || matches.length === 0) return;
   fileFavoriteMatchesCache[teamId] = matches;
@@ -755,6 +767,7 @@ function updateFavoriteMatchesCache(teamId: number | string, matches: any[], tea
     const clean = norm.replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '').replace(/\s+/g, ' ').trim();
     if (clean) fileFavoriteMatchesCache[clean] = matches;
   }
+  saveFavoriteMatchesCacheDebounced();
 }
 
 // API: Scrape FotMob Team Fixtures (Last 5 & Next 5 matches)
@@ -824,19 +837,6 @@ app.post('/api/fotmob/batch-teams', async (req, res) => {
                                   (tId && fileFavoriteMatchesCache[String(tId)]) || 
                                   (normHint && fileFavoriteMatchesCache[normHint]);
 
-          if (existingMatches && Array.isArray(existingMatches) && existingMatches.length > 0) {
-            if (tId) {
-              results[tId] = existingMatches;
-              results[String(tId)] = existingMatches;
-            }
-            if (t.id) {
-              results[t.id] = existingMatches;
-              results[String(t.id)] = existingMatches;
-            }
-            if (normHint) results[normHint] = existingMatches;
-            return;
-          }
-
           if ((!tId || tId <= 0) && nameHint) {
             const searchRes = await searchFotMobTeam(nameHint);
             if (searchRes?.team?.id) {
@@ -865,6 +865,19 @@ app.post('/api/fotmob/batch-teams', async (req, res) => {
                 results[normData] = data.pastMatches;
               }
             }
+          }
+
+          // Fallback to cached matches if live fetch returned nothing (e.g. temporary network glitch)
+          if ((!results[tId] || results[tId].length === 0) && existingMatches && Array.isArray(existingMatches) && existingMatches.length > 0) {
+            if (tId) {
+              results[tId] = existingMatches;
+              results[String(tId)] = existingMatches;
+            }
+            if (t.id) {
+              results[t.id] = existingMatches;
+              results[String(t.id)] = existingMatches;
+            }
+            if (normHint) results[normHint] = existingMatches;
           }
         } catch (err) {
           // Proceed with remaining teams

@@ -1,6 +1,7 @@
 import { Match, MatchFilters, MatchItem, DEFAULT_MATCH_FILTERS } from '../types';
 import { isTeamNameInFavorites, normalizeTeamName } from '../data/favoriteClubs';
 import { getTeamId } from './teamCrests';
+import { HISTORICAL_MATCHES_DATA } from '../data/historicalMatches';
 
 /**
  * Determines whether a tournament / league is classified as a Cup (Copa / Torneio Eliminatório / Continental / Internacional)
@@ -73,23 +74,24 @@ export function isLeagueCompetition(competitionName?: string, leagueId?: number)
  */
 export function filterTeamPastMatches(
   matches: MatchItem[],
-  filters: MatchFilters,
-  teamName: string,
+  filters?: MatchFilters,
+  teamName?: string,
   teamId?: number
 ): MatchItem[] {
   if (!matches || !Array.isArray(matches) || matches.length === 0) {
     return [];
   }
 
-  const normTeam = normalizeTeamName(teamName);
+  const effectiveFilters = filters || DEFAULT_MATCH_FILTERS;
+  const normTeam = normalizeTeamName(teamName || '');
 
   // 1. Competição Filter
   const compFiltered = matches.filter((m) => {
     const isCup = m.isCup !== undefined ? m.isCup : isCupCompetition(m.competition);
-    if (filters.competition === 'league') {
+    if (effectiveFilters.competition === 'league') {
       return !isCup;
     }
-    if (filters.competition === 'cup') {
+    if (effectiveFilters.competition === 'cup') {
       return isCup;
     }
     return true; // 'all' -> Liga + Copa
@@ -106,17 +108,17 @@ export function filterTeamPastMatches(
       isHome = normalizeTeamName(m.homeTeam) === normTeam;
     }
 
-    if (filters.mando === 'home') {
+    if (effectiveFilters.mando === 'home') {
       return isHome;
     }
-    if (filters.mando === 'away') {
+    if (effectiveFilters.mando === 'away') {
       return !isHome;
     }
     return true; // 'all' -> Casa + Fora
   });
 
   // 3. Histórico Window (up to 5 or 10 valid games)
-  return mandoFiltered.slice(0, filters.window);
+  return mandoFiltered.slice(0, effectiveFilters.window || 5);
 }
 
 /**
@@ -253,85 +255,65 @@ export function filterIndexMatches(
 }
 
 /**
- * Generates 24 realistic past matches for a team with mixed competition (League + Cup)
- * and venue (Home + Away) to ensure seamless filtering before live data arrives.
- * Generates enough matches so that regardless of active filters (League/Cup/Home/Away),
- * there are always at least 5-10 valid games available.
+ * Retrieves verified finished matches for a team from the authoritative historical matches dataset.
+ * Strictly uses verified match results only; never generates or assumes scores or information.
+ * Returns matches ordered chronologically descending (most recent first).
  */
 export function generateFallbackTeamMatches(teamName: string, teamId: number): MatchItem[] {
-  const dates = [
-    '15/09/2026', '12/09/2026', '08/09/2026', '05/09/2026', '01/09/2026',
-    '28/08/2026', '24/08/2026', '20/08/2026', '16/08/2026', '12/08/2026',
-    '08/08/2026', '04/08/2026', '31/07/2026', '27/07/2026', '23/07/2026',
-    '19/07/2026', '15/07/2026', '11/07/2026', '07/07/2026', '03/07/2026',
-    '29/06/2026', '25/06/2026', '21/06/2026', '17/06/2026'
-  ];
+  if (!teamName && !teamId) return [];
 
-  // Variations based on teamId seed for organic, authentic club variance
-  const seed = Math.abs(teamId || 1000);
-  const patternSeed = seed % 3;
+  const norm = normalizeTeamName(teamName);
+  const matched = HISTORICAL_MATCHES_DATA.filter((m) => {
+    if (m.status !== 'finished' || !m.score?.ft) return false;
+    if (teamId && (m.team1Id === teamId || m.team2Id === teamId)) return true;
+    const n1 = normalizeTeamName(m.team1);
+    const n2 = normalizeTeamName(m.team2);
+    return n1 === norm || n2 === norm;
+  });
 
-  const basePatterns = [
-    // 0: Under 1.5 heavy
-    [
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 1, aScore: 0 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'E' as const, hScore: 0, aScore: 0 },
-      { isHome: true, isCup: true, comp: 'Copa Nacional', res: 'V' as const, hScore: 2, aScore: 1 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'D' as const, hScore: 1, aScore: 0 },
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 1, aScore: 0 },
-      { isHome: false, isCup: true, comp: 'Copa Continental', res: 'E' as const, hScore: 1, aScore: 1 },
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 3, aScore: 1 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 0, aScore: 1 },
-    ],
-    // 1: High scoring & wins
-    [
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 2, aScore: 1 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 1, aScore: 3 },
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 1, aScore: 0 },
-      { isHome: false, isCup: true, comp: 'Copa Nacional', res: 'E' as const, hScore: 1, aScore: 1 },
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'D' as const, hScore: 0, aScore: 2 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 0, aScore: 1 },
-      { isHome: true, isCup: true, comp: 'Copa Continental', res: 'V' as const, hScore: 2, aScore: 0 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'E' as const, hScore: 2, aScore: 2 },
-    ],
-    // 2: Mixed with recent fire streak
-    [
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 0, aScore: 1 },
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'E' as const, hScore: 0, aScore: 0 },
-      { isHome: false, isCup: true, comp: 'Copa Nacional', res: 'D' as const, hScore: 2, aScore: 0 },
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 2, aScore: 1 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'E' as const, hScore: 1, aScore: 1 },
-      { isHome: true, isCup: true, comp: 'Copa Continental', res: 'V' as const, hScore: 1, aScore: 0 },
-      { isHome: false, isCup: false, comp: 'Campeonato Nacional', res: 'D' as const, hScore: 3, aScore: 1 },
-      { isHome: true, isCup: false, comp: 'Campeonato Nacional', res: 'V' as const, hScore: 2, aScore: 0 },
-    ],
-  ];
+  if (matched.length === 0) return [];
 
-  const chosenList = basePatterns[patternSeed];
-  // Repeat to produce 24 matches
-  const fullList = [...chosenList, ...chosenList, ...chosenList];
+  // Sort descending by date (most recent first)
+  const sorted = [...matched].sort((a, b) => {
+    return new Date(b.date).getTime() - new Date(a.date).getTime();
+  });
 
-  return fullList.slice(0, 24).map((p, i) => ({
-    id: `fb-match-${teamId}-${i}`,
-    date: dates[i] || '20/08/2026',
-    homeTeam: p.isHome ? teamName : 'Adversário',
-    homeId: p.isHome ? teamId : 9000 + i,
-    awayTeam: p.isHome ? 'Adversário' : teamName,
-    awayId: p.isHome ? 9000 + i : teamId,
-    homeScore: p.hScore,
-    awayScore: p.aScore,
-    competition: p.comp,
-    result: p.res,
-    isCup: p.isCup,
-    isHome: p.isHome,
-  }));
+  return sorted.map((m, idx) => {
+    const isHome = (teamId && m.team1Id === teamId) || normalizeTeamName(m.team1) === norm;
+    const homeScore = m.score!.ft![0];
+    const awayScore = m.score!.ft![1];
+    let result: 'V' | 'E' | 'D' = 'E';
+    if (homeScore === awayScore) {
+      result = 'E';
+    } else if (isHome) {
+      result = homeScore > awayScore ? 'V' : 'D';
+    } else {
+      result = awayScore > homeScore ? 'V' : 'D';
+    }
+
+    return {
+      id: m.id || `verified-hist-${teamId}-${idx}`,
+      date: m.date,
+      time: m.time,
+      homeTeam: m.team1,
+      homeId: m.team1Id,
+      awayTeam: m.team2,
+      awayId: m.team2Id,
+      homeScore,
+      awayScore,
+      competition: m.leagueName || 'Campeonato',
+      result,
+      isCup: m.isCup !== undefined ? m.isCup : isCupCompetition(m.leagueName),
+      isHome,
+    };
+  });
 }
 
 /**
- * Robustly resolves or computes the 5-game emoji sequence for any favorite club.
+ * Robustly resolves or computes the emoji sequence for any favorite club.
  * Checks ID in teamForms, normalized name in teamForms, lowercase name, aliases,
- * dictionary ID, favorites list, and dynamically falls back to generateFallbackTeamMatches.
- * This guarantees that NO favorite club is ever rendered without its 5-emoji streak.
+ * dictionary ID, favorites list, and verified historical fixtures.
+ * Uses verified match results only without assuming fake scores.
  */
 export function getOrComputeTeamEmojis(
   teamName: string,
@@ -340,7 +322,7 @@ export function getOrComputeTeamEmojis(
   filters?: MatchFilters,
   favoritesList?: { id: number; name: string }[]
 ): string[] {
-  if (!teamName && !teamId) return ['✅', '🔥', '🛡️', '✅', '🔻'];
+  if (!teamName && !teamId) return [];
 
   const targetWindow = filters?.window || 5;
 
@@ -386,9 +368,13 @@ export function getOrComputeTeamEmojis(
     }
   }
 
-  // 6. Immediate deterministic fallback for favorite club on initial load until live FotMob fixtures arrive
+  // 6. Look up verified historical matches only (never assume scores)
   const dictResolvedId = teamId || getTeamId(teamName) || 10000;
-  const fallbackMatches = generateFallbackTeamMatches(teamName, dictResolvedId);
-  const filtered = filterTeamPastMatches(fallbackMatches, filters || DEFAULT_MATCH_FILTERS, teamName, dictResolvedId);
-  return calculateTeamEmojis(filtered, targetWindow);
+  const verifiedMatches = generateFallbackTeamMatches(teamName, dictResolvedId);
+  if (verifiedMatches && verifiedMatches.length > 0) {
+    const filtered = filterTeamPastMatches(verifiedMatches, filters || DEFAULT_MATCH_FILTERS, teamName, dictResolvedId);
+    return calculateTeamEmojis(filtered, targetWindow);
+  }
+
+  return [];
 }

@@ -52,9 +52,26 @@ export function useBalancoData(
         if (!isMounted) return;
 
         if (betsRes && betsRes.success && Array.isArray(betsRes.bets)) {
-          setBets(betsRes.bets);
-          if (betsRes.bets.some((b: BetItem) => b.status === 'Pendente' || (b.legs && b.legs.length > 0))) {
-            handleSyncAllMatchResults(true, betsRes.bets);
+          // Deduplicate bets by ID and unique match/title key to ensure each ticket and team appears only once
+          const seenIds = new Set<string>();
+          const seenKeys = new Set<string>();
+          const uniqueBets: BetItem[] = [];
+
+          betsRes.bets.forEach((b: BetItem) => {
+            if (!b || !b.id || seenIds.has(b.id)) return;
+            seenIds.add(b.id);
+
+            const titleNorm = (b.title || '').toLowerCase().trim();
+            const compositeKey = `${b.date || ''}_${titleNorm}`;
+            if (compositeKey && seenKeys.has(compositeKey)) return;
+            if (compositeKey) seenKeys.add(compositeKey);
+
+            uniqueBets.push(b);
+          });
+
+          setBets(uniqueBets);
+          if (uniqueBets.some((b: BetItem) => b.status === 'Pendente' || (b.legs && b.legs.length > 0))) {
+            handleSyncAllMatchResults(true, uniqueBets);
           }
         }
         if (bankrollRes && bankrollRes.success && typeof bankrollRes.initialCapital === 'number') {
@@ -168,10 +185,12 @@ export function useBalancoData(
 
       if (updatedCount > 0) {
         setBets(updatedBets);
-        setNotification({
-          message: `Sincronização concluída! ${updatedCount} ${updatedCount === 1 ? 'aposta atualizada' : 'apostas atualizadas'}.`,
-          type: 'success',
-        });
+        if (!silent) {
+          setNotification({
+            message: `Sincronização concluída! ${updatedCount} ${updatedCount === 1 ? 'aposta atualizada' : 'apostas atualizadas'}.`,
+            type: 'success',
+          });
+        }
       } else if (!silent) {
         setNotification({
           message: 'Todas as apostas já estão 100% atualizadas com os resultados oficiais.',
@@ -191,45 +210,6 @@ export function useBalancoData(
     }
   };
 
-  // Synchronize automatically when teamRawMatches or dateMatches receive new finalized results (throttled)
-  useEffect(() => {
-    if (!enabled || !bets || bets.length === 0) return;
-    const hasUnfinishedBets = bets.some(
-      (b) =>
-        b.status === 'Pendente' ||
-        (b.legs && b.legs.some((l) => l.matchStatus !== 'finished'))
-    );
-    if (
-      hasUnfinishedBets &&
-      ((dateMatches && dateMatches.length > 0) || (teamRawMatches && Object.keys(teamRawMatches).length > 0))
-    ) {
-      const now = Date.now();
-      if (now - lastSyncRef.current < 8000) return;
-      const timer = setTimeout(() => {
-        lastSyncRef.current = Date.now();
-        handleSyncAllMatchResults(true);
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [teamRawMatches, dateMatches, enabled]);
-
-  // Periodic background sync for active/pending bets (every 60s)
-  useEffect(() => {
-    if (!enabled) return;
-    const hasActiveBets = bets.some(
-      (b) =>
-        b.status === 'Pendente' ||
-        (b.legs && b.legs.some((l) => l.matchStatus !== 'finished'))
-    );
-    if (!hasActiveBets) return;
-
-    const timer = setInterval(() => {
-      handleSyncAllMatchResults(true);
-    }, 60000);
-
-    return () => clearInterval(timer);
-  }, [bets, enabled]);
-
   const handleSaveBet = async (bet: BetItem) => {
     const calculatedProfit = calculateBetProfit(bet.status, bet.amount, bet.odd);
     const sanitizedBet: BetItem = {
@@ -238,10 +218,21 @@ export function useBalancoData(
     };
 
     setBets((prev) => {
+      // 1. By exact ID
       const idx = prev.findIndex((b) => b.id === sanitizedBet.id);
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = sanitizedBet;
+        return next;
+      }
+      // 2. Prevent duplicate ticket creation if same date + title exists
+      const titleNorm = (sanitizedBet.title || '').toLowerCase().trim();
+      const existingIdx = prev.findIndex(
+        (b) => b.date === sanitizedBet.date && (b.title || '').toLowerCase().trim() === titleNorm
+      );
+      if (existingIdx >= 0) {
+        const next = [...prev];
+        next[existingIdx] = sanitizedBet;
         return next;
       }
       return [sanitizedBet, ...prev];

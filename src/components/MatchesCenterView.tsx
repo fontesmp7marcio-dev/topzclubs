@@ -446,16 +446,16 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
                       const isFav1 = isTeamNameInFavorites(match.team1, activeFavList);
                       const isFav2 = isTeamNameInFavorites(match.team2, activeFavList);
 
-                      // Requirement 3: On the main page, reverse the favorite club's recent results emoji sequence so the newest match appears on the far left.
+                      // Synchronized emoji sequence matching Historical Calendar modal: Left-to-right reading order starting with the most recent match
                       const rawEmojis1 = isFav1
                         ? getOrComputeTeamEmojis(match.team1, match.team1Id, teamForms, filters, activeFavList)
                         : [];
-                      const emojis1 = rawEmojis1.slice(0, filters.window || 5).reverse();
+                      const emojis1 = rawEmojis1.slice(0, filters.window || 5);
 
                       const rawEmojis2 = isFav2
                         ? getOrComputeTeamEmojis(match.team2, match.team2Id, teamForms, filters, activeFavList)
                         : [];
-                      const emojis2 = rawEmojis2.slice(0, filters.window || 5).reverse();
+                      const emojis2 = rawEmojis2.slice(0, filters.window || 5);
 
                       // Positions
                       const pos1 = (idx * 3 + 4) % 18 + 1;

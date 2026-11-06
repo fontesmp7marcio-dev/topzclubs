@@ -110,9 +110,20 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
     return () => window.removeEventListener('click', handleClickOutside);
   }, []);
 
-  // Filtered bets
+  // Filtered bets (Strictly deduplicated to ensure each ticket and team appears only once)
   const filteredBets = useMemo(() => {
+    const seenIds = new Set<string>();
+    const seenKeys = new Set<string>();
+
     return bets.filter((b) => {
+      if (!b || !b.id || seenIds.has(b.id)) return false;
+      seenIds.add(b.id);
+
+      const titleNorm = (b.title || '').toLowerCase().trim();
+      const compositeKey = `${b.date || ''}_${titleNorm}`;
+      if (compositeKey && seenKeys.has(compositeKey)) return false;
+      if (compositeKey) seenKeys.add(compositeKey);
+
       // Search
       const q = searchQuery.toLowerCase().trim();
       const matchSearch =

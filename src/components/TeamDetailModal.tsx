@@ -303,7 +303,18 @@ export const TeamDetailModal: React.FC<TeamDetailModalProps> = ({
               setIsLoading(false);
               // Propagate to parent state to keep main page and all components 100% in sync
               if (data.pastMatches?.length && onUpdateTeamMatches) {
-                onUpdateTeamMatches(data.teamId || resolvedId, data.pastMatches, data.teamName || teamName);
+                const currentRaw = rawMatches;
+                const isIdentical =
+                  currentRaw &&
+                  Array.isArray(currentRaw) &&
+                  currentRaw.length === data.pastMatches.length &&
+                  currentRaw[0]?.id === data.pastMatches[0]?.id &&
+                  currentRaw[0]?.homeScore === data.pastMatches[0]?.homeScore &&
+                  currentRaw[0]?.awayScore === data.pastMatches[0]?.awayScore;
+
+                if (!isIdentical) {
+                  onUpdateTeamMatches(data.teamId || resolvedId, data.pastMatches, data.teamName || teamName);
+                }
               }
               return;
             }
@@ -445,9 +456,9 @@ export const TeamDetailModal: React.FC<TeamDetailModalProps> = ({
                         ))}
                       </div>
 
-                      {streakFire >= 2 && (
+                      {streakFire >= 1 && (
                         <span className="text-[9px] font-black uppercase text-amber-300 bg-amber-950/80 border border-amber-800/40 px-1.5 py-0.2 rounded shrink-0">
-                          {streakFire}🔥 Seguidos
+                          {streakFire === 1 ? '1🔥 Foguinho' : `${streakFire}🔥 Seguidos`}
                         </span>
                       )}
                       {streakLoss >= 2 && (

@@ -34,7 +34,9 @@ import {
   getEndingFireStreak,
   getEndingLossStreak,
   generateFallbackTeamMatches,
+  getOrComputeTeamEmojis,
 } from '../utils/competitionFilter';
+import { getTeamId } from '../utils/teamCrests';
 import { getBrasiliaTodayStr } from '../utils/dateUtils';
 
 interface BetModalProps {
@@ -45,8 +47,8 @@ interface BetModalProps {
   initialBet?: BetItem | null;
   existingBets?: BetItem[];
   supabaseFavorites?: { id: number; name: string; country?: string; league?: string }[];
-  teamForms?: Record<number, string[]>;
-  teamRawMatches?: Record<number, MatchItem[]>;
+  teamForms?: Record<string | number, string[]>;
+  teamRawMatches?: Record<string | number, MatchItem[]>;
   filters?: MatchFilters;
   dateMatches?: Match[];
   selectedDate?: string;
@@ -399,12 +401,12 @@ export const BetModal: React.FC<BetModalProps> = ({
     supabaseFavorites || USER_FAVORITE_CLUBS_DATA
   );
   const [legs, setLegs] = useState<BetLeg[]>([]);
-  const [internalRawMatches, setInternalRawMatches] = useState<Record<number, MatchItem[]>>({});
+  const [internalRawMatches, setInternalRawMatches] = useState<Record<string | number, MatchItem[]>>({});
   const [showAllDayMatches, setShowAllDayMatches] = useState<boolean>(false);
   const [quickFilter, setQuickFilter] = useState<'foguinho' | null>(null);
   const [fireCountFilter, setFireCountFilter] = useState<number>(0); // 0 = todos, 2 = 2 foguinhos, 3 = 3 foguinhos
   const [oddsAvailability, setOddsAvailability] = useState<Record<string | number, { bet365: boolean; betano: boolean }>>({});
-  const fetchedTeamsRef = React.useRef<Set<number>>(new Set());
+  const fetchedTeamsRef = React.useRef<Set<string | number>>(new Set());
 
   // Reset showAllDayMatches, quickFilter and fireCountFilter when date changes or modal opens
   useEffect(() => {
@@ -645,6 +647,7 @@ export const BetModal: React.FC<BetModalProps> = ({
   }, [date, isOpen, dateMatches, selectedDate]);
 
   // Helper to find a favorite club by name or ID
+  // Helper to find a favorite club by name, ID or aliases
   const findFavoriteClub = React.useCallback(
     (teamName: string, teamId?: number) => {
       const list =
@@ -659,11 +662,21 @@ export const BetModal: React.FC<BetModalProps> = ({
         if (byId) return byId;
       }
       if (!teamName) return null;
+      const dictId = getTeamId(teamName);
+      if (dictId) {
+        const byDictId = list.find((f) => Number(f.id) === Number(dictId));
+        if (byDictId) return byDictId;
+      }
+
       const norm = normalizeTeamName(teamName);
+      const lower = teamName.toLowerCase().trim();
+
       return (
         list.find((f) => {
           const fNorm = normalizeTeamName(f.name);
           if (fNorm === norm) return true;
+          if (f.name.toLowerCase().trim() === lower) return true;
+          if (isTeamNameInFavorites(teamName, [f])) return true;
           if (norm.length >= 4 && fNorm.length >= 4 && (norm.includes(fNorm) || fNorm.includes(norm))) {
             return true;
           }
@@ -676,42 +689,99 @@ export const BetModal: React.FC<BetModalProps> = ({
 
   // Synchronized emoji calculator using the exact same logic and filters as TeamDetailModal / Main Dashboard
   const getTeamEmojis = React.useCallback(
-    (teamName: string, teamId: number): string[] => {
-      // 1. If teamForms from parent has it, use it directly (perfect synchronization)
-      if (teamForms && teamForms[teamId] && teamForms[teamId].length > 0) {
-        return teamForms[teamId];
+    (teamName: string, teamId?: number): string[] => {
+      const activeFavList =
+        userFavorites && userFavorites.length > 0
+          ? userFavorites
+          : supabaseFavorites && supabaseFavorites.length > 0
+          ? supabaseFavorites
+          : USER_FAVORITE_CLUBS_DATA;
+
+      const norm = normalizeTeamName(teamName);
+      const lower = teamName.toLowerCase().trim();
+      const dictId = getTeamId(teamName);
+      const effectiveId = teamId || dictId;
+
+      // 1. Direct ID / name lookup in teamForms from parent (perfect synchronization with main page)
+      if (teamForms) {
+        if (effectiveId && teamForms[effectiveId]?.length) return teamForms[effectiveId];
+        if (effectiveId && (teamForms as any)[String(effectiveId)]?.length) return (teamForms as any)[String(effectiveId)];
+        if (norm && (teamForms as any)[norm]?.length) return (teamForms as any)[norm];
+        if (lower && (teamForms as any)[lower]?.length) return (teamForms as any)[lower];
+        if (dictId && teamForms[dictId]?.length) return teamForms[dictId];
+        if (dictId && (teamForms as any)[String(dictId)]?.length) return (teamForms as any)[String(dictId)];
       }
-      // 2. From combined raw matches or realistic fallback
-      const raw = combinedRawMatches[teamId] || generateFallbackTeamMatches(teamName, teamId);
-      const effectiveFilters = filters || DEFAULT_MATCH_FILTERS;
-      const filtered = filterTeamPastMatches(raw, effectiveFilters, teamName, teamId);
-      return calculateTeamEmojis(filtered);
+
+      // 2. Direct lookup in combinedRawMatches (check ID, string ID, norm, lower, dictId)
+      let raw: MatchItem[] | undefined = undefined;
+      if (effectiveId && combinedRawMatches[effectiveId]?.length) raw = combinedRawMatches[effectiveId];
+      else if (effectiveId && (combinedRawMatches as any)[String(effectiveId)]?.length) raw = (combinedRawMatches as any)[String(effectiveId)];
+      else if (norm && (combinedRawMatches as any)[norm]?.length) raw = (combinedRawMatches as any)[norm];
+      else if (lower && (combinedRawMatches as any)[lower]?.length) raw = (combinedRawMatches as any)[lower];
+      else if (dictId && combinedRawMatches[dictId]?.length) raw = combinedRawMatches[dictId];
+      else if (dictId && (combinedRawMatches as any)[String(dictId)]?.length) raw = (combinedRawMatches as any)[String(dictId)];
+
+      if (!raw || raw.length === 0) {
+        const resId = effectiveId || 10000;
+        raw = generateFallbackTeamMatches(teamName, resId);
+      }
+
+      if (raw && raw.length > 0) {
+        const effectiveFilters = filters || DEFAULT_MATCH_FILTERS;
+        const filtered = filterTeamPastMatches(raw, effectiveFilters, teamName, effectiveId);
+        return calculateTeamEmojis(filtered, effectiveFilters.window || 5);
+      }
+
+      // 3. Fallback to getOrComputeTeamEmojis utility
+      return getOrComputeTeamEmojis(teamName, effectiveId, teamForms, filters, activeFavList);
     },
-    [teamForms, combinedRawMatches, filters]
+    [teamForms, combinedRawMatches, filters, userFavorites, supabaseFavorites]
   );
 
-  // Fetch past matches for any favorite teams in dayMatches that aren't yet loaded
+  // Fetch past matches for any favorite teams in allAvailableMatches that aren't yet loaded
   useEffect(() => {
-    if (!isOpen || dayMatches.length === 0) return;
+    if (!isOpen || allAvailableMatches.length === 0) return;
+
+    const activeFavList =
+      userFavorites && userFavorites.length > 0
+        ? userFavorites
+        : supabaseFavorites && supabaseFavorites.length > 0
+        ? supabaseFavorites
+        : USER_FAVORITE_CLUBS_DATA;
 
     const teamsToFetch: { id: number; name: string }[] = [];
-    dayMatches.forEach((m) => {
+    allAvailableMatches.forEach((m) => {
       const fav1 = findFavoriteClub(m.team1, m.team1Id);
+      const isFav1 = !!fav1 || isTeamNameInFavorites(m.team1, activeFavList);
+      const name1 = fav1?.name || m.team1;
+      const dictId1 = getTeamId(name1);
+      const id1 = m.team1Id || fav1?.id || dictId1 || 0;
+
       const fav2 = findFavoriteClub(m.team2, m.team2Id);
+      const isFav2 = !!fav2 || isTeamNameInFavorites(m.team2, activeFavList);
+      const name2 = fav2?.name || m.team2;
+      const dictId2 = getTeamId(name2);
+      const id2 = m.team2Id || fav2?.id || dictId2 || 0;
 
-      [fav1, fav2].forEach((fav) => {
-        if (!fav || !fav.id) return;
-        if (
-          (teamForms && teamForms[fav.id]?.length) ||
-          combinedRawMatches[fav.id]?.length ||
-          fetchedTeamsRef.current.has(fav.id)
-        ) {
-          return;
+      if (isFav1 && id1 > 0 && !fetchedTeamsRef.current.has(id1)) {
+        const norm1 = normalizeTeamName(name1);
+        const hasForm = teamForms && (teamForms[id1] || (teamForms as any)[String(id1)] || (teamForms as any)[norm1]);
+        const hasRaw = combinedRawMatches && (combinedRawMatches[id1] || (combinedRawMatches as any)[String(id1)] || (combinedRawMatches as any)[norm1]);
+        if (!hasForm && !hasRaw) {
+          fetchedTeamsRef.current.add(id1);
+          teamsToFetch.push({ id: id1, name: name1 });
         }
+      }
 
-        fetchedTeamsRef.current.add(fav.id);
-        teamsToFetch.push({ id: fav.id, name: fav.name });
-      });
+      if (isFav2 && id2 > 0 && !fetchedTeamsRef.current.has(id2)) {
+        const norm2 = normalizeTeamName(name2);
+        const hasForm = teamForms && (teamForms[id2] || (teamForms as any)[String(id2)] || (teamForms as any)[norm2]);
+        const hasRaw = combinedRawMatches && (combinedRawMatches[id2] || (combinedRawMatches as any)[String(id2)] || (combinedRawMatches as any)[norm2]);
+        if (!hasForm && !hasRaw) {
+          fetchedTeamsRef.current.add(id2);
+          teamsToFetch.push({ id: id2, name: name2 });
+        }
+      }
     });
 
     if (teamsToFetch.length > 0) {
@@ -730,11 +800,11 @@ export const BetModal: React.FC<BetModalProps> = ({
           console.warn('Batch fetch error in BetModal:', err);
         });
     }
-  }, [isOpen, dayMatches, findFavoriteClub, teamForms, combinedRawMatches]);
+  }, [isOpen, allAvailableMatches, findFavoriteClub, teamForms, combinedRawMatches, userFavorites, supabaseFavorites]);
 
-  // Evaluate each day match: check if favorite teams have active fire emoji (🔥 Under 1.5) or defeat emoji (🔻 Derrota) in their last match
+  // Evaluate each match: check if favorite teams have active fire emoji (🔥 Under 1.5) in their last match
   const matchesWithStreakInfo = React.useMemo(() => {
-    if (!dayMatches.length) return [];
+    if (!allAvailableMatches.length) return [];
     const activeFavList =
       userFavorites && userFavorites.length > 0
         ? userFavorites
@@ -742,17 +812,19 @@ export const BetModal: React.FC<BetModalProps> = ({
         ? supabaseFavorites
         : USER_FAVORITE_CLUBS_DATA;
 
-    return dayMatches.map((m) => {
+    return allAvailableMatches.map((m) => {
       const fav1 = findFavoriteClub(m.team1, m.team1Id);
       const isFav1 = !!fav1 || isTeamNameInFavorites(m.team1, activeFavList);
-      const resolvedFav1Id = fav1 ? fav1.id : m.team1Id;
-      const emojis1 = resolvedFav1Id ? getTeamEmojis(fav1 ? fav1.name : m.team1, resolvedFav1Id) : [];
+      const dictId1 = getTeamId(m.team1);
+      const resolvedFav1Id = m.team1Id || fav1?.id || dictId1 || 0;
+      const emojis1 = isFav1 ? getTeamEmojis(fav1 ? fav1.name : m.team1, resolvedFav1Id) : [];
       const streakFire1 = getEndingFireStreak(emojis1);
 
       const fav2 = findFavoriteClub(m.team2, m.team2Id);
       const isFav2 = !!fav2 || isTeamNameInFavorites(m.team2, activeFavList);
-      const resolvedFav2Id = fav2 ? fav2.id : m.team2Id;
-      const emojis2 = resolvedFav2Id ? getTeamEmojis(fav2 ? fav2.name : m.team2, resolvedFav2Id) : [];
+      const dictId2 = getTeamId(m.team2);
+      const resolvedFav2Id = m.team2Id || fav2?.id || dictId2 || 0;
+      const emojis2 = isFav2 ? getTeamEmojis(fav2 ? fav2.name : m.team2, resolvedFav2Id) : [];
       const streakFire2 = getEndingFireStreak(emojis2);
 
       // Rule: Match qualifies strictly if at least one favorite team has the "Foguinho" (On Fire) status
@@ -775,9 +847,28 @@ export const BetModal: React.FC<BetModalProps> = ({
         qualifies,
       };
     });
-  }, [dayMatches, findFavoriteClub, getTeamEmojis, userFavorites, supabaseFavorites]);
+  }, [allAvailableMatches, findFavoriteClub, getTeamEmojis, userFavorites, supabaseFavorites]);
 
-  // Identifica partidas e times já incluídos em outros bilhetes criados para esta mesma data
+  // Helper para normalizar e comparar datas (YYYY-MM-DD e DD/MM/YYYY)
+  const areDatesSameDay = useCallback((d1?: string, d2?: string): boolean => {
+    if (!d1 || !d2) return false;
+    const normalize = (str: string) => {
+      const s = str.trim();
+      if (s.includes('/')) {
+        const parts = s.split('/');
+        if (parts.length === 3) {
+          const [d, m, y] = parts;
+          const yr = y.length === 2 ? `20${y}` : y;
+          return `${yr}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+        }
+      }
+      return s;
+    };
+    return normalize(d1) === normalize(d2);
+  }, []);
+
+  // Identifica partidas e times já incluídos em outros bilhetes existentes NA MESMA DATA
+  // Regra do usuário: Não repetir o time no mesmo dia. Se o time joga amanhã ou depois, ele fica disponível normalmente!
   const usedInOtherBets = React.useMemo(() => {
     const usedMatchIds = new Set<string>();
     const usedTeams = new Set<string>();
@@ -786,24 +877,24 @@ export const BetModal: React.FC<BetModalProps> = ({
       // Se for a mesma aposta sendo editada, não exclui as partidas dela própria
       if (initialBet && b.id === initialBet.id) return;
 
-      // Verifica se a aposta é da mesma data ou possui seleções (legs) nesta data
-      const isSameDate = b.date === date;
-      const hasLegOnDate = Array.isArray(b.legs) && b.legs.some((l) => l.date === date);
+      // Verifica se o bilhete é exatamente para a mesma data selecionada
+      const isBetOnCurrentDate = areDatesSameDay(b.date, date);
 
-      if (!isSameDate && !hasLegOnDate) return;
-
-      // Coleta IDs e times das seleções (legs)
+      // Coleta IDs e times das seleções (legs) de outros bilhetes que pertencem a esta mesma data
       if (Array.isArray(b.legs)) {
         b.legs.forEach((leg) => {
-          if (leg.matchId) usedMatchIds.add(String(leg.matchId));
-          if (leg.id) usedMatchIds.add(String(leg.id));
-          if (leg.team1) usedTeams.add(normalizeTeamName(leg.team1));
-          if (leg.team2) usedTeams.add(normalizeTeamName(leg.team2));
+          const legDate = leg.date || b.date;
+          if (areDatesSameDay(legDate, date)) {
+            if (leg.matchId) usedMatchIds.add(String(leg.matchId));
+            if (leg.id) usedMatchIds.add(String(leg.id));
+            if (leg.team1) usedTeams.add(normalizeTeamName(leg.team1));
+            if (leg.team2) usedTeams.add(normalizeTeamName(leg.team2));
+          }
         });
       }
 
-      // Coleta nomes de times do título (ex: "Palmeiras x Corinthians + Flamengo x Vasco")
-      if (b.title) {
+      // Se o bilhete existente foi registrado para a mesma data, também protege times presentes no título
+      if (isBetOnCurrentDate && b.title) {
         const segments = b.title.split('+');
         segments.forEach((seg) => {
           const teams = seg.split(/\s+x\s+|\s+vs\s+/i);
@@ -816,16 +907,16 @@ export const BetModal: React.FC<BetModalProps> = ({
     });
 
     return { usedMatchIds, usedTeams };
-  }, [existingBets, date, initialBet]);
+  }, [existingBets, initialBet, date, areDatesSameDay]);
 
-  // Helper para verificar se a partida (ou seus times) já foi utilizada em outro bilhete do dia
+  // Helper para verificar se a partida (ou seus times) já foi utilizada em outro bilhete na mesma data
   const isMatchAlreadyUsedInOtherBet = React.useCallback(
     (m: Match): boolean => {
-      // 1. Por ID da partida
+      // 1. Por ID da partida na mesma data
       if (usedInOtherBets.usedMatchIds.has(String(m.id))) {
         return true;
       }
-      // 2. Por nome dos times
+      // 2. Por nome dos times na mesma data
       const t1 = normalizeTeamName(m.team1);
       const t2 = normalizeTeamName(m.team2);
       if (t1 && usedInOtherBets.usedTeams.has(t1)) return true;
@@ -840,12 +931,15 @@ export const BetModal: React.FC<BetModalProps> = ({
     return matchesWithStreakInfo.filter((item) => item.qualifies);
   }, [matchesWithStreakInfo]);
 
-  // Matches filtrados estritamente pela regra do foguinho E excluindo jogos já usados em outros bilhetes da data
+  // Matches filtrados estritamente pela regra do foguinho E excluindo jogos já usados em outros bilhetes
   const streakMatches = React.useMemo(() => {
     return matchesWithStreakInfo
       .filter((item) => {
         if (!item.qualifies || !item.hasFireStreak) return false;
         if (quickFilter === 'foguinho') {
+          if (fireCountFilter === 1) {
+            return (item.isFav1 && item.streakFire1 === 1) || (item.isFav2 && item.streakFire2 === 1);
+          }
           if (fireCountFilter === 2) {
             return (item.isFav1 && item.streakFire1 === 2) || (item.isFav2 && item.streakFire2 === 2);
           }
@@ -859,7 +953,7 @@ export const BetModal: React.FC<BetModalProps> = ({
       .filter((item) => !isMatchAlreadyUsedInOtherBet(item.match));
   }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet, quickFilter, fireCountFilter]);
 
-  // Quantidade de jogos ocultados por já estarem em outros bilhetes salvos desta data
+  // Quantidade de jogos ocultados por já estarem em outros bilhetes salvos
   const hiddenMatchesCount = React.useMemo(() => {
     return matchesWithStreakInfo.filter(
       (item) => item.qualifies && isMatchAlreadyUsedInOtherBet(item.match)
@@ -937,6 +1031,31 @@ export const BetModal: React.FC<BetModalProps> = ({
         if (!matchItem || !matchItem.hasFireStreak) {
           return prevIds;
         }
+
+        // Before adding a team, check whether it is already linked to another ticket on the same date
+        const t1 = normalizeTeamName(match.team1);
+        const t2 = normalizeTeamName(match.team2);
+
+        if ((t1 && usedInOtherBets.usedTeams.has(t1)) || (t2 && usedInOtherBets.usedTeams.has(t2)) || isMatchAlreadyUsedInOtherBet(match)) {
+          const usedTeam = (t1 && usedInOtherBets.usedTeams.has(t1)) ? match.team1 : match.team2;
+          alert(`O time "${usedTeam}" já está vinculado a outro bilhete na data selecionada! No mesmo dia, cada clube favorito só pode aparecer em um único bilhete.`);
+          return prevIds;
+        }
+
+        // Prevent the same team from being added multiple times to the same ticket
+        const alreadySelectedMatches = allAvailableMatches.filter((m) => prevIds.includes(m.id));
+        const currentSelectedTeams = new Set<string>();
+        alreadySelectedMatches.forEach((m) => {
+          if (m.team1) currentSelectedTeams.add(normalizeTeamName(m.team1));
+          if (m.team2) currentSelectedTeams.add(normalizeTeamName(m.team2));
+        });
+
+        if ((t1 && currentSelectedTeams.has(t1)) || (t2 && currentSelectedTeams.has(t2))) {
+          const dupTeam = (t1 && currentSelectedTeams.has(t1)) ? match.team1 : match.team2;
+          alert(`O time "${dupTeam}" já foi selecionado neste bilhete! Cada time só pode aparecer uma vez.`);
+          return prevIds;
+        }
+
         if (prevIds.length >= 5) {
           alert('Você pode selecionar no máximo 5 jogos para uma aposta.');
           return prevIds;
@@ -997,7 +1116,7 @@ export const BetModal: React.FC<BetModalProps> = ({
 
       return nextIds;
     });
-  }, [matchesWithStreakInfo, allAvailableMatches, combinedRawMatches, date, status]);
+  }, [matchesWithStreakInfo, allAvailableMatches, combinedRawMatches, date, status, usedInOtherBets, isMatchAlreadyUsedInOtherBet]);
 
   if (!isOpen) return null;
 
@@ -1152,11 +1271,12 @@ export const BetModal: React.FC<BetModalProps> = ({
                     <span className="text-[10px] font-bold">Foguinho</span>
                   </button>
 
-                  {/* Seletor específico da quantidade de foguinhos (2 ou 3) */}
+                  {/* Seletor específico da quantidade de foguinhos (1, 2 ou 3+) */}
                   {quickFilter === 'foguinho' && (
                     <div className="flex items-center gap-0.5 pl-1 border-l border-zinc-700/60 animate-fade-in">
                       {[
                         { label: 'Todos', count: 0 },
+                        { label: '1 🔥', count: 1 },
                         { label: '2 🔥', count: 2 },
                         { label: '3+ 🔥', count: 3 },
                       ].map((opt) => (
@@ -1182,7 +1302,7 @@ export const BetModal: React.FC<BetModalProps> = ({
                     className="text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full flex items-center gap-1 shrink-0"
                     title={`${hiddenMatchesCount} ${
                       hiddenMatchesCount === 1 ? 'jogo já utilizado' : 'jogos já utilizados'
-                    } em outros bilhetes deste dia foram ocultados para evitar duplicidade.`}
+                    } em outros bilhetes desta data foram ocultados para evitar duplicidade no mesmo dia.`}
                   >
                     <span>🔒</span>
                     <span>{hiddenMatchesCount}</span>
@@ -1212,15 +1332,17 @@ export const BetModal: React.FC<BetModalProps> = ({
                       </span>
                     </div>
                     <p className="text-[11px] text-zinc-400 leading-relaxed">
-                      Para não repetir jogos no mesmo dia, os {hiddenMatchesCount}{' '}
-                      {hiddenMatchesCount === 1 ? 'jogo anterior foi ocultado' : 'jogos anteriores foram ocultados'}. Você pode selecionar outra data acima ou adicionar um confronto manual.
+                      Para não repetir times e jogos no mesmo dia, os {hiddenMatchesCount}{' '}
+                      {hiddenMatchesCount === 1 ? 'jogo anterior foi ocultado' : 'jogos anteriores foram ocultados'}. Cada time só pode ser vinculado a um único bilhete por data.
                     </p>
                   </>
                 ) : (
                   <div className="flex items-center justify-center gap-2 text-xs font-bold text-zinc-300 py-1">
                     {quickFilter === 'foguinho' && fireCountFilter > 0 ? (
                       <span>
-                        {fireCountFilter === 2
+                        {fireCountFilter === 1
+                          ? 'Nenhum clube favorito com sequência de 1 foguinho para esta data.'
+                          : fireCountFilter === 2
                           ? 'Nenhum clube favorito com sequência de 2 foguinhos para esta data.'
                           : 'Nenhum clube favorito com sequência de 3+ foguinhos para esta data.'}
                       </span>

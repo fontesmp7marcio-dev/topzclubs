@@ -159,11 +159,7 @@ export default function App() {
         const dictId1 = getTeamId(name1) || getTeamId(m.team1);
         const id1 = m.team1Id || dictId1 || fav1?.id || 0;
         const norm1 = normalizeTeamName(name1);
-        const hasData1 = (id1 && teamRawMatches[id1] && teamRawMatches[id1].length > 0) || 
-                         (teamRawMatches[norm1] && teamRawMatches[norm1].length > 0) ||
-                         (dictId1 && teamRawMatches[dictId1] && teamRawMatches[dictId1].length > 0);
-
-        if (!fetchedFormsRef.current.has(norm1) && !hasData1) {
+        if (!fetchedFormsRef.current.has(norm1)) {
           fetchedFormsRef.current.add(norm1);
           if (id1) fetchedFormsRef.current.add(String(id1));
           teamsToFetch.push({ id: id1, name: name1 });
@@ -179,11 +175,8 @@ export default function App() {
         const dictId2 = getTeamId(name2) || getTeamId(m.team2);
         const id2 = m.team2Id || dictId2 || fav2?.id || 0;
         const norm2 = normalizeTeamName(name2);
-        const hasData2 = (id2 && teamRawMatches[id2] && teamRawMatches[id2].length > 0) || 
-                         (teamRawMatches[norm2] && teamRawMatches[norm2].length > 0) ||
-                         (dictId2 && teamRawMatches[dictId2] && teamRawMatches[dictId2].length > 0);
 
-        if (!fetchedFormsRef.current.has(norm2) && !hasData2) {
+        if (!fetchedFormsRef.current.has(norm2)) {
           fetchedFormsRef.current.add(norm2);
           if (id2) fetchedFormsRef.current.add(String(id2));
           teamsToFetch.push({ id: id2, name: name2 });
@@ -211,7 +204,7 @@ export default function App() {
       .catch((err) => {
         console.warn('[App] Error batch synchronizing sequence data:', err);
       });
-  }, [dateMatches, supabaseFavorites, teamRawMatches]);
+  }, [dateMatches, supabaseFavorites]);
 
   // Synchronized Dynamic Emoji Sequences:
   // Dynamically calculates the exact emoji sequence for active clubs using active filters

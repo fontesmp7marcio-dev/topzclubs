@@ -31,48 +31,10 @@ export const InAppNotificationModal: React.FC = () => {
     };
   }, []);
 
-  // Poll server for new notification logs every 8 seconds
+  // Listen only to local custom events for manual simulations/testing, without unwanted automatic polling
   useEffect(() => {
-    let timer: NodeJS.Timeout;
-
-    const checkServerLogs = async () => {
-      try {
-        const res = await fetch('/api/notifications/logs');
-        const data = await res.json();
-        if (data.success && Array.isArray(data.logs) && data.logs.length > 0) {
-          const latestLogs: InAppNotificationPayload[] = data.logs;
-
-          if (isInitialLoad) {
-            // Mark existing logs as seen so we don't pop up old notifications when loading page
-            const existingSet = new Set<string>();
-            latestLogs.forEach((log) => existingSet.add(log.id));
-            setSeenIds(existingSet);
-            setIsInitialLoad(false);
-          } else {
-            // Find first unseen log
-            const unseen = latestLogs.find((log) => !seenIds.has(log.id));
-            if (unseen) {
-              setActiveNotification(unseen);
-              setSeenIds((prev) => new Set(prev).add(unseen.id));
-            }
-          }
-        }
-      } catch (err) {
-        // Silent error
-      }
-    };
-
-    // First check after 2 seconds
-    const firstCheck = setTimeout(checkServerLogs, 2000);
-
-    // Interval check every 8 seconds
-    timer = setInterval(checkServerLogs, 8000);
-
-    return () => {
-      clearTimeout(firstCheck);
-      clearInterval(timer);
-    };
-  }, [seenIds, isInitialLoad]);
+    // No automatic polling timers to prevent unexpected modal popups
+  }, []);
 
   // Auto hide & play audio when notification is active
   useEffect(() => {
