@@ -7,10 +7,20 @@ import { HISTORICAL_MATCHES_DATA } from '../data/historicalMatches';
  * Determines whether a tournament / league is classified as a Cup (Copa / Torneio Eliminatório / Continental / Internacional)
  * or a League (Liga / Pontos Corridos).
  */
+const cupCache = new Map<string, boolean>();
+
+/**
+ * Determines whether a tournament / league is classified as a Cup (Copa / Torneio Eliminatório / Continental / Internacional)
+ * or a League (Liga / Pontos Corridos).
+ */
 export function isCupCompetition(competitionName?: string, leagueId?: number): boolean {
   if (!competitionName) return false;
+  const cached = cupCache.get(competitionName);
+  if (cached !== undefined) return cached;
+
   const lower = competitionName.toLowerCase().trim();
 
+  let isCup = false;
   // 1. Continental & International Tournaments that are Cups / Knockout format
   if (
     lower.includes('champions league') ||
@@ -29,11 +39,8 @@ export function isCupCompetition(competitionName?: string, leagueId?: number): b
     lower.includes('gold cup') ||
     lower.includes('leagues cup')
   ) {
-    return true;
-  }
-
-  // 2. Common Cup keywords (e.g., Copa do Brasil, FA Cup, Copa del Rey, DFB Pokal, Taça de Portugal)
-  if (
+    isCup = true;
+  } else if (
     /\b(copa|cup|coppa|coupe|pokal|taça|taca|beker|trophy|shield)\b/i.test(lower) ||
     lower.includes('supercup') ||
     lower.includes('supercopa') ||
@@ -42,15 +49,13 @@ export function isCupCompetition(competitionName?: string, leagueId?: number): b
     lower.includes('super taça') ||
     lower.includes('super cup')
   ) {
-    return true;
+    isCup = true;
+  } else if (lower.includes('friendly') || lower.includes('amistoso') || lower.includes('friendlies')) {
+    isCup = true;
   }
 
-  // 3. Friendly and exhibition tournaments
-  if (lower.includes('friendly') || lower.includes('amistoso') || lower.includes('friendlies')) {
-    return true;
-  }
-
-  return false;
+  cupCache.set(competitionName, isCup);
+  return isCup;
 }
 
 /**
@@ -254,6 +259,8 @@ export function filterIndexMatches(
   });
 }
 
+const fallbackMatchesCache = new Map<string, MatchItem[]>();
+
 /**
  * Retrieves verified finished matches for a team from the authoritative historical matches dataset.
  * Strictly uses verified match results only; never generates or assumes scores or information.
@@ -261,6 +268,9 @@ export function filterIndexMatches(
  */
 export function generateFallbackTeamMatches(teamName: string, teamId: number): MatchItem[] {
   if (!teamName && !teamId) return [];
+  const cacheKey = `${teamName || ''}__${teamId || 0}`;
+  const cached = fallbackMatchesCache.get(cacheKey);
+  if (cached !== undefined) return cached;
 
   const norm = normalizeTeamName(teamName);
   const matched = HISTORICAL_MATCHES_DATA.filter((m) => {
@@ -271,14 +281,17 @@ export function generateFallbackTeamMatches(teamName: string, teamId: number): M
     return n1 === norm || n2 === norm;
   });
 
-  if (matched.length === 0) return [];
+  if (matched.length === 0) {
+    fallbackMatchesCache.set(cacheKey, []);
+    return [];
+  }
 
   // Sort descending by date (most recent first)
   const sorted = [...matched].sort((a, b) => {
     return new Date(b.date).getTime() - new Date(a.date).getTime();
   });
 
-  return sorted.map((m, idx) => {
+  const res = sorted.map((m, idx) => {
     const isHome = (teamId && m.team1Id === teamId) || normalizeTeamName(m.team1) === norm;
     const homeScore = m.score!.ft![0];
     const awayScore = m.score!.ft![1];
@@ -307,6 +320,9 @@ export function generateFallbackTeamMatches(teamName: string, teamId: number): M
       isHome,
     };
   });
+
+  fallbackMatchesCache.set(cacheKey, res);
+  return res;
 }
 
 /**

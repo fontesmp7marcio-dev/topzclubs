@@ -76,7 +76,7 @@ const COUNTRY_EMOJI_MAP: Record<string, string> = {
   CRC: '🇨🇷',
 };
 
-export const CountryFlag: React.FC<CountryFlagProps> = ({
+export const CountryFlag: React.FC<CountryFlagProps> = React.memo(({
   ccode = 'INT',
   countryName,
   name,
@@ -144,4 +144,5 @@ export const CountryFlag: React.FC<CountryFlagProps> = ({
       style={{ width: `${size}px`, height: `${size}px` }}
     />
   );
-};
+});
+

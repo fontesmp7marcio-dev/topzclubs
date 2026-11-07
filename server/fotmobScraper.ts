@@ -934,7 +934,10 @@ export async function scrapeFotMobMatchesByDate(dateStr: string): Promise<any[]>
   const cleanDate = dateStr.replace(/-/g, ''); // YYYYMMDD
   const cacheKey = `fotmob:matches-by-date:${cleanDate}`;
   const cached = memoryCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < 3 * 60 * 1000) { // 3 min cache
+  const todayClean = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()).replace(/-/g, '');
+  const isPastDate = cleanDate < todayClean;
+  const cacheTTL = isPastDate ? 12 * 60 * 60 * 1000 : 2.5 * 60 * 1000;
+  if (cached && Date.now() - cached.timestamp < cacheTTL) {
     return cached.data;
   }
 

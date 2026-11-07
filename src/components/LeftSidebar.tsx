@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useDeferredValue } from 'react';
 import { Trophy, ChevronDown, ChevronRight, Search, Globe, Flame, Star, Award, Shield } from 'lucide-react';
 import { LeagueOption, FotMobAllLeaguesData, FotMobLeagueItem } from '../types';
 import { CountryFlag } from './CountryFlag';
@@ -194,6 +194,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({
   onCloseMobile,
 }) => {
   const [filterText, setFilterText] = useState('');
+  const deferredFilter = useDeferredValue(filterText);
   const [expandedCountries, setExpandedCountries] = useState<Record<string, boolean>>({
     BRA: true,
     ENG: true,
@@ -339,11 +340,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({
     },
   ], []);
 
-  // Filtered countries list
+  // Filtered countries list (using deferredFilter for smooth input typing)
   const countriesToDisplay = useMemo(() => {
     if (allLeaguesData?.countries && allLeaguesData.countries.length > 0) {
-      if (!filterText.trim()) return allLeaguesData.countries;
-      const lower = filterText.toLowerCase();
+      if (!deferredFilter.trim()) return allLeaguesData.countries;
+      const lower = deferredFilter.toLowerCase();
       return allLeaguesData.countries.filter(
         (c) =>
           c.name.toLowerCase().includes(lower) ||
@@ -352,14 +353,14 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = React.memo(({
       );
     }
 
-    if (!filterText.trim()) return fallbackCountries;
-    const lower = filterText.toLowerCase();
+    if (!deferredFilter.trim()) return fallbackCountries;
+    const lower = deferredFilter.toLowerCase();
     return fallbackCountries.filter(
       (c) =>
         c.name.toLowerCase().includes(lower) ||
         c.leagues.some((l) => l.name.toLowerCase().includes(lower))
     );
-  }, [allLeaguesData, fallbackCountries, filterText]);
+  }, [allLeaguesData, fallbackCountries, deferredFilter]);
 
   return (
     <aside className="w-full flex flex-col gap-3 select-none">

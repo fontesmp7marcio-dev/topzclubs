@@ -71,7 +71,11 @@ export function useBalancoData(
 
           setBets(uniqueBets);
           if (uniqueBets.some((b: BetItem) => b.status === 'Pendente' || (b.legs && b.legs.length > 0))) {
-            handleSyncAllMatchResults(true, uniqueBets);
+            setTimeout(() => {
+              if (isMounted) {
+                handleSyncAllMatchResults(true, uniqueBets);
+              }
+            }, 1500);
           }
         }
         if (bankrollRes && bankrollRes.success && typeof bankrollRes.initialCapital === 'number') {

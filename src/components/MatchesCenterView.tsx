@@ -133,6 +133,465 @@ interface TournamentGroup {
   matches: Match[];
 }
 
+interface MatchRowProps {
+  match: Match;
+  idx: number;
+  rowDateStr: string;
+  activeFavList: any[];
+  teamForms: Record<string | number, string[]>;
+  filters?: MatchFilters;
+  onSelectTeam: (teamName: string, teamId?: number) => void;
+  onToggleFavorite?: (club: { id: number; name: string; country: string; league?: string }) => void;
+  onOpenAiAnalysis?: (match: Match) => void;
+}
+
+const MatchRow = React.memo<MatchRowProps>(({
+  match,
+  idx,
+  rowDateStr,
+  activeFavList,
+  teamForms,
+  filters,
+  onSelectTeam,
+  onToggleFavorite,
+  onOpenAiAnalysis,
+}) => {
+  const isLive = match.status === 'live' || (!!match.liveMinute && match.status !== 'finished' && match.status !== 'postponed');
+  const isFinished = match.status === 'finished';
+  const isPostponed = match.status === 'postponed';
+
+  const cardBgClass = isLive
+    ? 'bg-[#12241b] hover:bg-[#182c22] border-l-2 border-l-emerald-400'
+    : isPostponed
+    ? 'bg-[#1a1714] hover:bg-[#221e1a] border-l-2 border-l-amber-500/50'
+    : isFinished
+    ? 'bg-[#141414] hover:bg-[#1a1a1a]'
+    : 'bg-[#22242b] hover:bg-[#282a33]';
+
+  const score1 = match.score?.ft ? match.score.ft[0] : null;
+  const score2 = match.score?.ft ? match.score.ft[1] : null;
+
+  const isFav1 = isTeamNameInFavorites(match.team1, activeFavList);
+  const isFav2 = isTeamNameInFavorites(match.team2, activeFavList);
+
+  const rawEmojis1 = isFav1
+    ? getOrComputeTeamEmojis(match.team1, match.team1Id, teamForms, filters, activeFavList)
+    : [];
+  const emojis1 = rawEmojis1.slice(0, filters?.window || 5);
+
+  const rawEmojis2 = isFav2
+    ? getOrComputeTeamEmojis(match.team2, match.team2Id, teamForms, filters, activeFavList)
+    : [];
+  const emojis2 = rawEmojis2.slice(0, filters?.window || 5);
+
+  const pos1 = (idx * 3 + 4) % 18 + 1;
+  const pos2 = (idx * 3 + 8) % 18 + 1;
+
+  return (
+    <div
+      id={`match-row-${match.id || idx}`}
+      className={`transition-colors cursor-default group ${cardBgClass}`}
+    >
+      {/* MOBILE LAYOUT (< 640px) */}
+      <div className="flex sm:hidden items-center px-3 py-2.5 gap-2.5 border-b border-zinc-900/40">
+        {/* Time / Status Column */}
+        <div className="w-14 shrink-0 flex flex-col items-center justify-center text-center">
+          {isLive ? (
+            <>
+              <span className="text-[11px] font-black text-emerald-400 tracking-tight">
+                {score1 ?? 0}×{score2 ?? 0}
+              </span>
+              <span className="inline-block px-1 py-0.2 rounded text-[8px] font-black uppercase text-emerald-300 bg-emerald-950/80 border border-emerald-800/40 mt-0.5 animate-pulse">
+                {match.liveMinute || 'VIVO'}
+              </span>
+            </>
+          ) : isFinished ? (
+            <>
+              <span className="text-[11px] font-bold text-white tracking-tight">
+                {score1 !== null && score2 !== null ? `${score1}×${score2}` : 'FT'}
+              </span>
+              <span className="inline-block px-1 py-0.2 rounded text-[8px] font-bold text-zinc-300 bg-[#282828] border border-[#383838] mt-0.5">
+                FT
+              </span>
+            </>
+          ) : isPostponed ? (
+            <>
+              <span className="text-[10px] font-bold text-amber-400 tracking-tight">
+                ADIADO
+              </span>
+              <span className="inline-block px-1 py-0.2 rounded text-[8px] font-bold text-amber-300/80 bg-amber-950/40 border border-amber-800/40 mt-0.5">
+                POSTP
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-xs font-bold text-white tracking-tight">
+                {match.time || '21:00'}
+              </span>
+              <span className="text-[9px] text-zinc-500 mt-0.5">
+                {rowDateStr}
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* Divider Line */}
+        <div className="w-px h-10 bg-zinc-800/60 shrink-0" />
+
+        {/* Teams Column (Stacked) */}
+        <div className="flex-1 flex flex-col gap-2 min-w-0">
+          {/* Team 1 Row */}
+          <div className="flex items-start gap-1.5 min-w-0">
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTeam(match.team1, match.team1Id);
+              }}
+              className="w-6 h-6 rounded bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 shrink-0 cursor-pointer mt-0.5"
+            >
+              <TeamCrest teamName={match.team1} teamId={match.team1Id} size={18} />
+            </div>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onToggleFavorite) {
+                  onToggleFavorite({
+                    id: match.team1Id || 0,
+                    name: match.team1,
+                    country: match.countryCcode || 'Brasil',
+                    league: match.leagueName,
+                  });
+                }
+              }}
+              className="p-0.5 cursor-pointer shrink-0 mt-0.5"
+            >
+              <Star
+                className={`w-3 h-3 transition-all ${
+                  isFav1
+                    ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
+                    : 'text-zinc-600 hover:text-yellow-400'
+                }`}
+              />
+            </button>
+
+            <div className="flex flex-col min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectTeam(match.team1, match.team1Id);
+                  }}
+                  className={`text-xs font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
+                    isFav1 ? 'text-white font-bold' : 'text-zinc-200'
+                  }`}
+                >
+                  {match.team1}
+                </span>
+
+                <span className="px-1 py-0.2 rounded bg-[#1d2633] text-[9px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
+                  {pos1}°
+                </span>
+              </div>
+
+              {isFav1 && emojis1.length > 0 && (
+                <div className="flex items-center gap-1 mt-0.5" title="Sequência recente (últimos 5 jogos)">
+                  <div className="flex items-center gap-0.5 bg-[#141414] px-1 py-0.2 rounded border border-[#242424]">
+                    {emojis1.map((emoji, eIdx) => (
+                      <span key={eIdx} className="text-[10px] leading-none drop-shadow-md">{emoji}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Team 2 Row */}
+          <div className="flex items-start gap-1.5 min-w-0">
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTeam(match.team2, match.team2Id);
+              }}
+              className="w-6 h-6 rounded bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 shrink-0 cursor-pointer mt-0.5"
+            >
+              <TeamCrest teamName={match.team2} teamId={match.team2Id} size={18} />
+            </div>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onToggleFavorite) {
+                  onToggleFavorite({
+                    id: match.team2Id || 0,
+                    name: match.team2,
+                    country: match.countryCcode || 'Brasil',
+                    league: match.leagueName,
+                  });
+                }
+              }}
+              className="p-0.5 cursor-pointer shrink-0 mt-0.5"
+            >
+              <Star
+                className={`w-3 h-3 transition-all ${
+                  isFav2
+                    ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
+                    : 'text-zinc-600 hover:text-yellow-400'
+                }`}
+              />
+            </button>
+
+            <div className="flex flex-col min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectTeam(match.team2, match.team2Id);
+                  }}
+                  className={`text-xs font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
+                    isFav2 ? 'text-white font-bold' : 'text-zinc-200'
+                  }`}
+                >
+                  {match.team2}
+                </span>
+
+                <span className="px-1 py-0.2 rounded bg-[#1d2633] text-[9px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
+                  {pos2}°
+                </span>
+              </div>
+
+              {isFav2 && emojis2.length > 0 && (
+                <div className="flex items-center gap-1 mt-0.5" title="Sequência recente (últimos 5 jogos)">
+                  <div className="flex items-center gap-0.5 bg-[#141414] px-1 py-0.2 rounded border border-[#242424]">
+                    {emojis2.map((emoji, eIdx) => (
+                      <span key={eIdx} className="text-[10px] leading-none drop-shadow-md">{emoji}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* AI Analysis Action Button (Mobile) */}
+        {onOpenAiAnalysis && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenAiAnalysis(match);
+            }}
+            className="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg bg-zinc-900/40 hover:bg-[#a3ff12]/10 border border-[#a3ff12]/30 hover:border-[#a3ff12]/60 text-[#a3ff12] transition-all shadow-sm ml-1.5 cursor-pointer"
+            title="Gerar análise com IA (APWin)"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#a3ff12]" />
+          </button>
+        )}
+      </div>
+
+      {/* DESKTOP LAYOUT (>= 640px) */}
+      <div className="hidden sm:flex items-center justify-between px-4 py-3 gap-3">
+        {/* TEAM 1 (HOME) */}
+        <div className="flex-1 flex flex-col items-end justify-center min-w-0">
+          <div className="flex items-center justify-end gap-2 min-w-0">
+            <span className="px-1.5 py-0.2 rounded-md bg-[#1d2633] text-[10px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
+              {pos1}°
+            </span>
+
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTeam(match.team1, match.team1Id);
+              }}
+              className={`text-[13px] font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
+                isFav1 ? 'text-white font-bold' : 'text-zinc-300'
+              }`}
+            >
+              {match.team1}
+            </span>
+
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTeam(match.team1, match.team1Id);
+              }}
+              className="w-7 h-7 rounded-lg bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 hover:border-zinc-500 transition-colors shrink-0 cursor-pointer"
+            >
+              <TeamCrest teamName={match.team1} teamId={match.team1Id} size={22} />
+            </div>
+
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onToggleFavorite) {
+                  onToggleFavorite({
+                    id: match.team1Id || 0,
+                    name: match.team1,
+                    country: match.countryCcode || 'Brasil',
+                    league: match.leagueName,
+                  });
+                }
+              }}
+              title={isFav1 ? `Desfavoritar ${match.team1}` : `Favoritar ${match.team1}`}
+              className="p-1 rounded-full hover:scale-125 transition-transform cursor-pointer shrink-0"
+            >
+              <Star
+                className={`w-3.5 h-3.5 transition-all ${
+                  isFav1
+                    ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
+                    : 'text-zinc-600 hover:text-yellow-400 hover:fill-yellow-400/40'
+                }`}
+              />
+            </button>
+          </div>
+
+          {isFav1 && emojis1.length > 0 && (
+            <div className="flex items-center justify-end gap-1 mt-1 pr-7" title="Sequência recente (últimos 5 jogos)">
+              <div className="flex items-center gap-1 bg-[#141414] px-1.5 py-0.5 rounded border border-[#262626]">
+                {emojis1.map((emoji, eIdx) => (
+                  <span key={eIdx} className="text-[11px] drop-shadow-md leading-none">{emoji}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* CENTER: TIME / SCORE / STATUS */}
+        <div className="w-20 shrink-0 flex flex-col items-center justify-center text-center px-1">
+          {isLive ? (
+            <>
+              <span className="text-xs font-black text-emerald-400 tracking-tight">
+                {score1 ?? 0} × {score2 ?? 0}
+              </span>
+              <span className="inline-block px-1 py-0.2 rounded text-[9px] font-black uppercase text-emerald-300 bg-emerald-950/80 border border-emerald-800/40 mt-0.5 animate-pulse">
+                {match.liveMinute || 'AO VIVO'}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                {rowDateStr}
+              </span>
+            </>
+          ) : isFinished ? (
+            <>
+              <span className="text-xs font-bold text-white tracking-tight">
+                {score1 !== null && score2 !== null ? `${score1} × ${score2}` : 'FT'}
+              </span>
+              <span className="inline-block px-1.5 py-0.2 rounded text-[9px] font-bold text-zinc-300 bg-[#282828] border border-[#383838] mt-0.5">
+                FT
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                {rowDateStr}
+              </span>
+            </>
+          ) : isPostponed ? (
+            <>
+              <span className="text-xs font-bold text-amber-400 tracking-tight">
+                ADIADO
+              </span>
+              <span className="inline-block px-1.5 py-0.2 rounded text-[9px] font-bold text-amber-300/80 bg-amber-950/40 border border-amber-800/40 mt-0.5">
+                POSTP
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                {rowDateStr}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-xs font-bold text-white tracking-tight">
+                {match.time || '21:00'}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                {rowDateStr}
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* TEAM 2 (AWAY) */}
+        <div className="flex-1 flex flex-col items-start justify-center min-w-0">
+          <div className="flex items-center justify-start gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onToggleFavorite) {
+                  onToggleFavorite({
+                    id: match.team2Id || 0,
+                    name: match.team2,
+                    country: match.countryCcode || 'Brasil',
+                    league: match.leagueName,
+                  });
+                }
+              }}
+              title={isFav2 ? `Desfavoritar ${match.team2}` : `Favoritar ${match.team2}`}
+              className="p-1 rounded-full hover:scale-125 transition-transform cursor-pointer shrink-0"
+            >
+              <Star
+                className={`w-3.5 h-3.5 transition-all ${
+                  isFav2
+                    ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
+                    : 'text-zinc-600 hover:text-yellow-400 hover:fill-yellow-400/40'
+                }`}
+              />
+            </button>
+
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTeam(match.team2, match.team2Id);
+              }}
+              className="w-7 h-7 rounded-lg bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 hover:border-zinc-500 transition-colors shrink-0 cursor-pointer"
+            >
+              <TeamCrest teamName={match.team2} teamId={match.team2Id} size={22} />
+            </div>
+
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectTeam(match.team2, match.team2Id);
+              }}
+              className={`text-[13px] font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
+                isFav2 ? 'text-white font-bold' : 'text-zinc-300'
+              }`}
+            >
+              {match.team2}
+            </span>
+
+            <span className="px-1.5 py-0.2 rounded-md bg-[#1d2633] text-[10px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
+              {pos2}°
+            </span>
+          </div>
+
+          {isFav2 && emojis2.length > 0 && (
+            <div className="flex items-center justify-start gap-1 mt-1 pl-7" title="Sequência recente (últimos 5 jogos)">
+              <div className="flex items-center gap-1 bg-[#141414] px-1.5 py-0.5 rounded border border-[#262626]">
+                {emojis2.map((emoji, eIdx) => (
+                  <span key={eIdx} className="text-[11px] drop-shadow-md leading-none">{emoji}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* AI Analysis Action Button (Desktop Only) */}
+        {onOpenAiAnalysis && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenAiAnalysis(match);
+            }}
+            className="flex items-center justify-center h-6 px-2 shrink-0 rounded bg-zinc-900/40 hover:bg-[#a3ff12]/10 border border-[#a3ff12]/30 hover:border-[#a3ff12]/60 text-[#a3ff12] font-bold text-[10px] uppercase tracking-wide transition-all shadow-sm ml-2 cursor-pointer"
+            title="Gerar análise com IA (APWin)"
+          >
+            Analise <Sparkles className="w-2.5 h-2.5 ml-0.5 text-[#a3ff12]" />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
   matches,
   selectedDate,
@@ -424,456 +883,20 @@ export const MatchesCenterView: React.FC<MatchesCenterViewProps> = React.memo(({
 
                   {/* Matches List */}
                   <div className="divide-y divide-[#1e1e1e]">
-                    {group.matches.map((match, idx) => {
-                      const isLive = match.status === 'live' || (!!match.liveMinute && match.status !== 'finished' && match.status !== 'postponed');
-                      const isFinished = match.status === 'finished';
-                      const isPostponed = match.status === 'postponed';
-                      const isUpcoming = !isLive && !isFinished && !isPostponed;
-
-                      // Visual card background based on match status:
-                      // Encerrado: Cinza escuro | Futuro: Cinza mais claro | Ao Vivo: Verde sutil e discreto | Adiado: Âmbar discreto
-                      const cardBgClass = isLive
-                        ? 'bg-[#12241b] hover:bg-[#182c22] border-l-2 border-l-emerald-400'
-                        : isPostponed
-                        ? 'bg-[#1a1714] hover:bg-[#221e1a] border-l-2 border-l-amber-500/50'
-                        : isFinished
-                        ? 'bg-[#141414] hover:bg-[#1a1a1a]'
-                        : 'bg-[#22242b] hover:bg-[#282a33]';
-
-                      const score1 = match.score?.ft ? match.score.ft[0] : null;
-                      const score2 = match.score?.ft ? match.score.ft[1] : null;
-
-                      const isFav1 = isTeamNameInFavorites(match.team1, activeFavList);
-                      const isFav2 = isTeamNameInFavorites(match.team2, activeFavList);
-
-                      // Synchronized emoji sequence matching Historical Calendar modal: Left-to-right reading order starting with the most recent match
-                      const rawEmojis1 = isFav1
-                        ? getOrComputeTeamEmojis(match.team1, match.team1Id, teamForms, filters, activeFavList)
-                        : [];
-                      const emojis1 = rawEmojis1.slice(0, filters.window || 5);
-
-                      const rawEmojis2 = isFav2
-                        ? getOrComputeTeamEmojis(match.team2, match.team2Id, teamForms, filters, activeFavList)
-                        : [];
-                      const emojis2 = rawEmojis2.slice(0, filters.window || 5);
-
-                      // Positions
-                      const pos1 = (idx * 3 + 4) % 18 + 1;
-                      const pos2 = (idx * 3 + 8) % 18 + 1;
-
-                      return (
-                        <div
-                          key={match.id || `match-${idx}`}
-                          id={`match-row-${match.id || idx}`}
-                          className={`transition-colors cursor-default group ${cardBgClass}`}
-                        >
-                          {/* ==================== MOBILE LAYOUT (< 640px) ==================== */}
-                          <div className="flex sm:hidden items-center px-3 py-2.5 gap-2.5 border-b border-zinc-900/40">
-                            {/* Time / Status Column */}
-                            <div className="w-14 shrink-0 flex flex-col items-center justify-center text-center">
-                              {isLive ? (
-                                <>
-                                  <span className="text-[11px] font-black text-emerald-400 tracking-tight">
-                                    {score1 ?? 0}×{score2 ?? 0}
-                                  </span>
-                                  <span className="inline-block px-1 py-0.2 rounded text-[8px] font-black uppercase text-emerald-300 bg-emerald-950/80 border border-emerald-800/40 mt-0.5 animate-pulse">
-                                    {match.liveMinute || 'VIVO'}
-                                  </span>
-                                </>
-                              ) : isFinished ? (
-                                <>
-                                  <span className="text-[11px] font-bold text-white tracking-tight">
-                                    {score1 !== null && score2 !== null ? `${score1}×${score2}` : 'FT'}
-                                  </span>
-                                  <span className="inline-block px-1 py-0.2 rounded text-[8px] font-bold text-zinc-300 bg-[#282828] border border-[#383838] mt-0.5">
-                                    FT
-                                  </span>
-                                </>
-                              ) : isPostponed ? (
-                                <>
-                                  <span className="text-[10px] font-bold text-amber-400 tracking-tight">
-                                    ADIADO
-                                  </span>
-                                  <span className="inline-block px-1 py-0.2 rounded text-[8px] font-bold text-amber-300/80 bg-amber-950/40 border border-amber-800/40 mt-0.5">
-                                    POSTP
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="text-xs font-bold text-white tracking-tight">
-                                    {match.time || '21:00'}
-                                  </span>
-                                  <span className="text-[9px] text-zinc-500 mt-0.5">
-                                    {rowDateStr}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-
-                            {/* Divider Line */}
-                            <div className="w-px h-10 bg-zinc-800/60 shrink-0" />
-
-                            {/* Teams Column (Stacked) */}
-                            <div className="flex-1 flex flex-col gap-2 min-w-0">
-                              {/* Team 1 Row */}
-                              <div className="flex items-start gap-1.5 min-w-0">
-                                <div
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectTeam(match.team1, match.team1Id);
-                                  }}
-                                  className="w-6 h-6 rounded bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 shrink-0 cursor-pointer mt-0.5"
-                                >
-                                  <TeamCrest teamName={match.team1} teamId={match.team1Id} size={18} />
-                                </div>
-
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (onToggleFavorite) {
-                                      onToggleFavorite({
-                                        id: match.team1Id || 0,
-                                        name: match.team1,
-                                        country: match.countryCcode || 'Brasil',
-                                        league: match.leagueName,
-                                      });
-                                    }
-                                  }}
-                                  className="p-0.5 cursor-pointer shrink-0 mt-0.5"
-                                >
-                                  <Star
-                                    className={`w-3 h-3 transition-all ${
-                                      isFav1
-                                        ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
-                                        : 'text-zinc-600 hover:text-yellow-400'
-                                    }`}
-                                  />
-                                </button>
-
-                                <div className="flex flex-col min-w-0 flex-1">
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    <span
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onSelectTeam(match.team1, match.team1Id);
-                                      }}
-                                      className={`text-xs font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
-                                        isFav1 ? 'text-white font-bold' : 'text-zinc-200'
-                                      }`}
-                                    >
-                                      {match.team1}
-                                    </span>
-
-                                    <span className="px-1 py-0.2 rounded bg-[#1d2633] text-[9px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
-                                      {pos1}°
-                                    </span>
-                                  </div>
-
-                                  {isFav1 && emojis1.length > 0 && (
-                                    <div className="flex items-center gap-1 mt-0.5" title="Sequência recente (últimos 5 jogos)">
-                                      <div className="flex items-center gap-0.5 bg-[#141414] px-1 py-0.2 rounded border border-[#242424]">
-                                        {emojis1.map((emoji, idx) => (
-                                          <span key={idx} className="text-[10px] leading-none drop-shadow-md">{emoji}</span>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-
-                              {/* Team 2 Row */}
-                              <div className="flex items-start gap-1.5 min-w-0">
-                                <div
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectTeam(match.team2, match.team2Id);
-                                  }}
-                                  className="w-6 h-6 rounded bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 shrink-0 cursor-pointer mt-0.5"
-                                >
-                                  <TeamCrest teamName={match.team2} teamId={match.team2Id} size={18} />
-                                </div>
-
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (onToggleFavorite) {
-                                      onToggleFavorite({
-                                        id: match.team2Id || 0,
-                                        name: match.team2,
-                                        country: match.countryCcode || 'Brasil',
-                                        league: match.leagueName,
-                                      });
-                                    }
-                                  }}
-                                  className="p-0.5 cursor-pointer shrink-0 mt-0.5"
-                                >
-                                  <Star
-                                    className={`w-3 h-3 transition-all ${
-                                      isFav2
-                                        ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
-                                        : 'text-zinc-600 hover:text-yellow-400'
-                                    }`}
-                                  />
-                                </button>
-
-                                <div className="flex flex-col min-w-0 flex-1">
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    <span
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onSelectTeam(match.team2, match.team2Id);
-                                      }}
-                                      className={`text-xs font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
-                                        isFav2 ? 'text-white font-bold' : 'text-zinc-200'
-                                      }`}
-                                    >
-                                      {match.team2}
-                                    </span>
-
-                                    <span className="px-1 py-0.2 rounded bg-[#1d2633] text-[9px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
-                                      {pos2}°
-                                    </span>
-                                  </div>
-
-                                  {isFav2 && emojis2.length > 0 && (
-                                    <div className="flex items-center gap-1 mt-0.5" title="Sequência recente (últimos 5 jogos)">
-                                      <div className="flex items-center gap-0.5 bg-[#141414] px-1 py-0.2 rounded border border-[#242424]">
-                                        {emojis2.map((emoji, idx) => (
-                                          <span key={idx} className="text-[10px] leading-none drop-shadow-md">{emoji}</span>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* AI Analysis Action Button (Mobile) - Just Sparkles icon to save horizontal space */}
-                            {onOpenAiAnalysis && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenAiAnalysis(match);
-                                }}
-                                className="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg bg-zinc-900/40 hover:bg-[#a3ff12]/10 border border-[#a3ff12]/30 hover:border-[#a3ff12]/60 text-[#a3ff12] transition-all shadow-sm ml-1.5 cursor-pointer"
-                                title="Gerar análise com IA (APWin)"
-                              >
-                                <Sparkles className="w-3.5 h-3.5 text-[#a3ff12]" />
-                              </button>
-                            )}
-                          </div>
-
-                          {/* ==================== DESKTOP LAYOUT (>= 640px) ==================== */}
-                          <div className="hidden sm:flex items-center justify-between px-4 py-3 gap-3">
-                            {/* TEAM 1 (HOME): POS + TEAM 1 NAME + LOGO 1 + STAR 1 */}
-                            <div className="flex-1 flex flex-col items-end justify-center min-w-0">
-                              <div className="flex items-center justify-end gap-2 min-w-0">
-                                {/* Position Pill */}
-                                <span className="px-1.5 py-0.2 rounded-md bg-[#1d2633] text-[10px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
-                                  {pos1}°
-                                </span>
-
-                                {/* Team 1 Name */}
-                                <span
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectTeam(match.team1, match.team1Id);
-                                  }}
-                                  className={`text-[13px] font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
-                                    isFav1 ? 'text-white font-bold' : 'text-zinc-300'
-                                  }`}
-                                >
-                                  {match.team1}
-                                </span>
-
-                                {/* Team 1 Crest */}
-                                <div
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectTeam(match.team1, match.team1Id);
-                                  }}
-                                  className="w-7 h-7 rounded-lg bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 hover:border-zinc-500 transition-colors shrink-0 cursor-pointer"
-                                >
-                                  <TeamCrest teamName={match.team1} teamId={match.team1Id} size={22} />
-                                </div>
-
-                                {/* Team 1 Interactive Favorite Star */}
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (onToggleFavorite) {
-                                      onToggleFavorite({
-                                        id: match.team1Id || 0,
-                                        name: match.team1,
-                                        country: match.countryCcode || 'Brasil',
-                                        league: match.leagueName,
-                                      });
-                                    }
-                                  }}
-                                  title={isFav1 ? `Desfavoritar ${match.team1}` : `Favoritar ${match.team1}`}
-                                  className="p-1 rounded-full hover:scale-125 transition-transform cursor-pointer shrink-0"
-                                >
-                                  <Star
-                                    className={`w-3.5 h-3.5 transition-all ${
-                                      isFav1
-                                        ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
-                                        : 'text-zinc-600 hover:text-yellow-400 hover:fill-yellow-400/40'
-                                    }`}
-                                  />
-                                </button>
-                              </div>
-
-                              {isFav1 && emojis1.length > 0 && (
-                                <div className="flex items-center justify-end gap-1 mt-1 pr-7" title="Sequência recente (últimos 5 jogos)">
-                                  <div className="flex items-center gap-1 bg-[#141414] px-1.5 py-0.5 rounded border border-[#262626]">
-                                    {emojis1.map((emoji, idx) => (
-                                      <span key={idx} className="text-[11px] drop-shadow-md leading-none">{emoji}</span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* CENTER: TIME / SCORE / STATUS */}
-                            <div className="w-20 shrink-0 flex flex-col items-center justify-center text-center px-1">
-                              {isLive ? (
-                                <>
-                                  <span className="text-xs font-black text-emerald-400 tracking-tight">
-                                    {score1 ?? 0} × {score2 ?? 0}
-                                  </span>
-                                  <span className="inline-block px-1 py-0.2 rounded text-[9px] font-black uppercase text-emerald-300 bg-emerald-950/80 border border-emerald-800/40 mt-0.5 animate-pulse">
-                                    {match.liveMinute || 'AO VIVO'}
-                                  </span>
-                                  <span className="text-[10px] text-zinc-500 mt-0.5">
-                                    {rowDateStr}
-                                  </span>
-                                </>
-                              ) : isFinished ? (
-                                <>
-                                  <span className="text-xs font-bold text-white tracking-tight">
-                                    {score1 !== null && score2 !== null ? `${score1} × ${score2}` : 'FT'}
-                                  </span>
-                                  <span className="inline-block px-1.5 py-0.2 rounded text-[9px] font-bold text-zinc-300 bg-[#282828] border border-[#383838] mt-0.5">
-                                    FT
-                                  </span>
-                                  <span className="text-[10px] text-zinc-500 mt-0.5">
-                                    {rowDateStr}
-                                  </span>
-                                </>
-                              ) : isPostponed ? (
-                                <>
-                                  <span className="text-xs font-bold text-amber-400 tracking-tight">
-                                    ADIADO
-                                  </span>
-                                  <span className="inline-block px-1.5 py-0.2 rounded text-[9px] font-bold text-amber-300/80 bg-amber-950/40 border border-amber-800/40 mt-0.5">
-                                    POSTP
-                                  </span>
-                                  <span className="text-[10px] text-zinc-500 mt-0.5">
-                                    {rowDateStr}
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <span className="text-xs font-bold text-white tracking-tight">
-                                    {match.time || '21:00'}
-                                  </span>
-                                  <span className="text-[10px] text-zinc-500 mt-0.5">
-                                    {rowDateStr}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-
-                            {/* TEAM 2 (AWAY): STAR 2 + LOGO 2 + TEAM 2 NAME + POS */}
-                            <div className="flex-1 flex flex-col items-start justify-center min-w-0">
-                              <div className="flex items-center justify-start gap-2 min-w-0">
-                                {/* Team 2 Interactive Favorite Star */}
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (onToggleFavorite) {
-                                      onToggleFavorite({
-                                        id: match.team2Id || 0,
-                                        name: match.team2,
-                                        country: match.countryCcode || 'Brasil',
-                                        league: match.leagueName,
-                                      });
-                                    }
-                                  }}
-                                  title={isFav2 ? `Desfavoritar ${match.team2}` : `Favoritar ${match.team2}`}
-                                  className="p-1 rounded-full hover:scale-125 transition-transform cursor-pointer shrink-0"
-                                >
-                                  <Star
-                                    className={`w-3.5 h-3.5 transition-all ${
-                                      isFav2
-                                        ? 'fill-yellow-400 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.6)]'
-                                        : 'text-zinc-600 hover:text-yellow-400 hover:fill-yellow-400/40'
-                                    }`}
-                                  />
-                                </button>
-
-                                {/* Team 2 Crest */}
-                                <div
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectTeam(match.team2, match.team2Id);
-                                  }}
-                                  className="w-7 h-7 rounded-lg bg-[#181818] border border-[#262626] flex items-center justify-center p-0.5 hover:border-zinc-500 transition-colors shrink-0 cursor-pointer"
-                                >
-                                  <TeamCrest teamName={match.team2} teamId={match.team2Id} size={22} />
-                                </div>
-
-                                {/* Team 2 Name */}
-                                <span
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectTeam(match.team2, match.team2Id);
-                                  }}
-                                  className={`text-[13px] font-semibold truncate hover:text-emerald-400 transition-colors cursor-pointer ${
-                                    isFav2 ? 'text-white font-bold' : 'text-zinc-300'
-                                  }`}
-                                >
-                                  {match.team2}
-                                </span>
-
-                                {/* Position Pill */}
-                                <span className="px-1.5 py-0.2 rounded-md bg-[#1d2633] text-[10px] font-semibold text-sky-400 border border-sky-800/30 shrink-0">
-                                  {pos2}°
-                                </span>
-                              </div>
-
-                              {isFav2 && emojis2.length > 0 && (
-                                <div className="flex items-center justify-start gap-1 mt-1 pl-7" title="Sequência recente (últimos 5 jogos)">
-                                  <div className="flex items-center gap-1 bg-[#141414] px-1.5 py-0.5 rounded border border-[#262626]">
-                                    {emojis2.map((emoji, idx) => (
-                                      <span key={idx} className="text-[11px] drop-shadow-md leading-none">{emoji}</span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-
-                            {/* AI Analysis Action Button (Desktop Only) */}
-                            {onOpenAiAnalysis && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onOpenAiAnalysis(match);
-                                }}
-                                className="flex items-center justify-center h-6 px-2 shrink-0 rounded bg-zinc-900/40 hover:bg-[#a3ff12]/10 border border-[#a3ff12]/30 hover:border-[#a3ff12]/60 text-[#a3ff12] font-bold text-[10px] uppercase tracking-wide transition-all shadow-sm ml-2 cursor-pointer"
-                                title="Gerar análise com IA (APWin)"
-                              >
-                                Analise <Sparkles className="w-2.5 h-2.5 ml-0.5 text-[#a3ff12]" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                    {group.matches.map((match, idx) => (
+                      <MatchRow
+                        key={match.id || `match-${idx}`}
+                        match={match}
+                        idx={idx}
+                        rowDateStr={rowDateStr}
+                        activeFavList={activeFavList}
+                        teamForms={teamForms}
+                        filters={filters}
+                        onSelectTeam={onSelectTeam}
+                        onToggleFavorite={onToggleFavorite}
+                        onOpenAiAnalysis={onOpenAiAnalysis}
+                      />
+                    ))}
                   </div>
                 </div>
               )}

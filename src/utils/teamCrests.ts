@@ -1322,18 +1322,27 @@ export const KNOWN_TEAM_ID_MAP: Record<string, number> = {
   'kuwait sc': 102036,
 };
 
+const normNameCache = new Map<string, string>();
+const stripAffixesCache = new Map<string, string>();
+const teamIdLookupCache = new Map<string, number | undefined>();
+const crestUrlCache = new Map<string, string>();
+
 /**
  * Normalizes any club name string into a standardized lookup key.
  */
 function normalizeName(str: string): string {
   if (!str) return '';
-  return str
+  const cached = normNameCache.get(str);
+  if (cached !== undefined) return cached;
+  const res = str
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  normNameCache.set(str, res);
+  return res;
 }
 
 /**
@@ -1342,11 +1351,16 @@ function normalizeName(str: string): string {
  * "RCD Espanyol de Barcelona" -> "espanyol".
  */
 function stripClubAffixes(str: string): string {
-  return str
+  if (!str) return '';
+  const cached = stripAffixesCache.get(str);
+  if (cached !== undefined) return cached;
+  const res = str
     .replace(/\b(fc|cf|sc|ec|cd|ca|afc|ac|se|cr|fbc|rcd|rb|ss|as|fk|sk|bk|ff|if|bsc|tsg|vfb|vfl|sv|fsv|sd|ud|rc|aj|ogc|osc|sco|hsc|sl|spvc|cska|cpl|csa|crb|abc)\b/g, ' ')
     .replace(/\b(clube|esporte|sociedade|futebol|football|club|balompie|deportiva|deportivo|calcio|esportiva|regatas|paulista|mineiro|paranaense|gaucho|carioca|de|da|do|dos|das)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  stripAffixesCache.set(str, res);
+  return res;
 }
 
 /**
@@ -1355,34 +1369,42 @@ function stripClubAffixes(str: string): string {
  */
 export function getTeamId(teamName?: string): number | undefined {
   if (!teamName || typeof teamName !== 'string') return undefined;
+  const cached = teamIdLookupCache.get(teamName);
+  if (cached !== undefined) return cached;
 
   const rawTrimmed = teamName.trim();
   const normalized = normalizeName(rawTrimmed);
-  if (!normalized) return undefined;
+  if (!normalized) {
+    teamIdLookupCache.set(teamName, undefined);
+    return undefined;
+  }
 
   // 1. Direct dictionary match
   if (KNOWN_TEAM_ID_MAP[normalized] !== undefined) {
-    return KNOWN_TEAM_ID_MAP[normalized];
+    const val = KNOWN_TEAM_ID_MAP[normalized];
+    teamIdLookupCache.set(teamName, val);
+    return val;
   }
 
   // 2. Direct dictionary match on lowercased raw string
   const lowerRaw = rawTrimmed.toLowerCase();
   if (KNOWN_TEAM_ID_MAP[lowerRaw] !== undefined) {
-    return KNOWN_TEAM_ID_MAP[lowerRaw];
+    const val = KNOWN_TEAM_ID_MAP[lowerRaw];
+    teamIdLookupCache.set(teamName, val);
+    return val;
   }
 
   // 3. Match without affixes (e.g. "AFC Bournemouth" -> "bournemouth")
   const stripped = stripClubAffixes(normalized);
   if (stripped && stripped !== normalized) {
     if (KNOWN_TEAM_ID_MAP[stripped] !== undefined) {
-      return KNOWN_TEAM_ID_MAP[stripped];
+      const val = KNOWN_TEAM_ID_MAP[stripped];
+      teamIdLookupCache.set(teamName, val);
+      return val;
     }
   }
 
-  // 4. We will NOT do regex fuzzy matching here anymore. It's too aggressive.
-  // We already checked exact matches, lower-case exact matches, and suffix-stripped matches.
-  // Fuzzy matching "dinamo" will accidentally catch other teams.
-
+  teamIdLookupCache.set(teamName, undefined);
   return undefined;
 }
 
@@ -1392,27 +1414,28 @@ export function getTeamId(teamName?: string): number | undefined {
  * or stale database IDs are corrected automatically to their genuine logos.
  */
 export function getTeamCrestUrl(teamName?: string, explicitTeamId?: number | string): string {
-  // 1. If we have an explicit ID (which we usually do from the API), try to use it directly,
-  // EXCEPT if the dictionary overrides it (this fixes bugs where an API gives a stale ID, 
-  // but also fixes bugs where a substring match accidentally overrode a valid explicit ID).
-  
+  const cacheKey = `${teamName || ''}__${explicitTeamId || ''}`;
+  const cached = crestUrlCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   let finalId = Number(explicitTeamId);
 
   // If a teamName is provided, check if our authoritative dictionary has it EXACTLY.
   if (teamName) {
     const verifiedId = getTeamId(teamName);
-    // ONLY override if the API didn't provide an ID, OR if we want to force our dictionary over the API.
-    // For now, let's trust the API's explicit ID if it exists, otherwise fallback to our dictionary.
     if (verifiedId) {
-       if (isNaN(finalId) || finalId <= 0) {
-         finalId = verifiedId;
-       }
+      if (isNaN(finalId) || finalId <= 0) {
+        finalId = verifiedId;
+      }
     }
   }
 
+  let res = '';
   if (!isNaN(finalId) && finalId > 0) {
-    return `https://images.fotmob.com/image_resources/logo/teamlogo/${finalId}.png`;
+    res = `https://images.fotmob.com/image_resources/logo/teamlogo/${finalId}.png`;
   }
 
-  return '';
+  crestUrlCache.set(cacheKey, res);
+  return res;
 }
+

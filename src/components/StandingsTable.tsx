@@ -16,7 +16,7 @@ interface StandingsTableProps {
   supabaseFavorites?: { id: number; name: string; country?: string; league?: string }[];
 }
 
-export const StandingsTable: React.FC<StandingsTableProps> = ({
+export const StandingsTable: React.FC<StandingsTableProps> = React.memo(({
   standings,
   selectedLeague,
   onSelectTeam,
@@ -434,4 +434,5 @@ export const StandingsTable: React.FC<StandingsTableProps> = ({
 
     </div>
   );
-};
+});
+

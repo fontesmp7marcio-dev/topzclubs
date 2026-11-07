@@ -5,16 +5,18 @@ import { USER_FAVORITE_CLUBS_DATA, normalizeTeamName, isTeamNameInFavorites } fr
 import { FotMobHeader } from './components/FotMobHeader';
 import { LeftSidebar } from './components/LeftSidebar';
 import { MatchesCenterView } from './components/MatchesCenterView';
-import { StandingsTable } from './components/StandingsTable';
-import { MatchDetailModal } from './components/MatchDetailModal';
-import { TeamDetailModal } from './components/TeamDetailModal';
-import { AiAnalysisModal } from './components/AiAnalysisModal';
-import { CalendarPickerModal } from './components/CalendarPickerModal';
-import { BalancoView } from './components/BalancoView';
-import { SimuladorBanca } from './components/SimuladorBanca';
-import { RelatorioConfrontos } from './components/RelatorioConfrontos';
-import { NotificacoesView } from './components/NotificacoesView';
 import { useBalancoData } from './hooks/useBalancoData';
+
+// Code-split heavy views and modals for instant initial boot and silky navigation
+const StandingsTable = React.lazy(() => import('./components/StandingsTable').then(m => ({ default: m.StandingsTable })));
+const MatchDetailModal = React.lazy(() => import('./components/MatchDetailModal').then(m => ({ default: m.MatchDetailModal })));
+const TeamDetailModal = React.lazy(() => import('./components/TeamDetailModal').then(m => ({ default: m.TeamDetailModal })));
+const AiAnalysisModal = React.lazy(() => import('./components/AiAnalysisModal').then(m => ({ default: m.AiAnalysisModal })));
+const CalendarPickerModal = React.lazy(() => import('./components/CalendarPickerModal').then(m => ({ default: m.CalendarPickerModal })));
+const BalancoView = React.lazy(() => import('./components/BalancoView').then(m => ({ default: m.BalancoView })));
+const SimuladorBanca = React.lazy(() => import('./components/SimuladorBanca').then(m => ({ default: m.SimuladorBanca })));
+const RelatorioConfrontos = React.lazy(() => import('./components/RelatorioConfrontos').then(m => ({ default: m.RelatorioConfrontos })));
+const NotificacoesView = React.lazy(() => import('./components/NotificacoesView').then(m => ({ default: m.NotificacoesView })));
 import { calculateStandings } from './utils/standings';
 import { getBrasiliaTodayStr, addDaysToDateStr } from './utils/dateUtils';
 import { isFemaleOrWomensMatch } from './utils/femaleFilter';
@@ -235,75 +237,46 @@ export default function App() {
       });
     }
 
-    allFavList.forEach((fav) => {
-      const norm = normalizeTeamName(fav.name);
-      const raw = findRawMatches(fav.name, fav.id);
-      const isPlayingToday = norm ? activeTeamsSet.has(norm) : false;
+    const processTeam = (name: string, id?: number, isPlayingToday = false) => {
+      const norm = normalizeTeamName(name);
+      if (!norm || forms[norm]) return;
+      const raw = findRawMatches(name, id);
+      const dictId = getTeamId(name);
+      const effectiveId = id || dictId || 10000;
 
-      // Only compute if team has raw matches or is playing today
-      if (raw && raw.length > 0) {
-        const dictId = getTeamId(fav.name);
-        const effectiveId = fav.id || dictId || 10000;
-        const filtered = filterTeamPastMatches(raw, filters, fav.name, effectiveId);
-        const emojis = calculateTeamEmojis(filtered, filters.window || 5);
-        if (emojis.length > 0) {
-          if (fav.id) forms[fav.id] = emojis;
-          if (norm) forms[norm] = emojis;
-          const lower = fav.name.toLowerCase().trim();
-          if (lower) forms[lower] = emojis;
-          if (dictId) forms[dictId] = emojis;
+      let listToUse: MatchItem[] | undefined = raw;
+      if (!listToUse || listToUse.length === 0) {
+        if (isPlayingToday) {
+          listToUse = generateFallbackTeamMatches(name, effectiveId);
         }
-      } else if (isPlayingToday) {
-        const dictId = getTeamId(fav.name);
-        const effectiveId = fav.id || dictId || 10000;
-        const fallback = generateFallbackTeamMatches(fav.name, effectiveId);
-        const filtered = filterTeamPastMatches(fallback, filters, fav.name, effectiveId);
+      }
+
+      if (listToUse && listToUse.length > 0) {
+        const filtered = filterTeamPastMatches(listToUse, filters, name, effectiveId);
         const emojis = calculateTeamEmojis(filtered, filters.window || 5);
         if (emojis.length > 0) {
-          if (fav.id) forms[fav.id] = emojis;
+          if (id) forms[id] = emojis;
           if (norm) forms[norm] = emojis;
-          const lower = fav.name.toLowerCase().trim();
+          const lower = name.toLowerCase().trim();
           if (lower) forms[lower] = emojis;
           if (dictId) forms[dictId] = emojis;
         }
       }
+    };
+
+    allFavList.forEach((fav) => {
+      const norm = normalizeTeamName(fav.name);
+      const isPlayingToday = norm ? activeTeamsSet.has(norm) : false;
+      processTeam(fav.name, fav.id, isPlayingToday);
     });
 
-    // Also link any match IDs from dateMatches that correspond to favorites
     if (dateMatches && dateMatches.length > 0) {
       dateMatches.forEach((m) => {
-        const isFav1 = isTeamNameInFavorites(m.team1, allFavList);
-        if (isFav1) {
-          const norm1 = normalizeTeamName(m.team1);
-          const lower1 = m.team1.toLowerCase().trim();
-          const dictId1 = getTeamId(m.team1);
-          const effectiveId1 = m.team1Id || dictId1 || 10000;
-          const raw1 = findRawMatches(m.team1, m.team1Id) || generateFallbackTeamMatches(m.team1, effectiveId1);
-          if (raw1 && raw1.length > 0) {
-            const filtered1 = filterTeamPastMatches(raw1, filters, m.team1, effectiveId1);
-            const emojis1 = calculateTeamEmojis(filtered1, filters.window || 5);
-            if (m.team1Id) forms[m.team1Id] = emojis1;
-            if (norm1) forms[norm1] = emojis1;
-            if (lower1) forms[lower1] = emojis1;
-            if (dictId1) forms[dictId1] = emojis1;
-          }
+        if (m.team1 && isTeamNameInFavorites(m.team1, allFavList)) {
+          processTeam(m.team1, m.team1Id, true);
         }
-
-        const isFav2 = isTeamNameInFavorites(m.team2, allFavList);
-        if (isFav2) {
-          const norm2 = normalizeTeamName(m.team2);
-          const lower2 = m.team2.toLowerCase().trim();
-          const dictId2 = getTeamId(m.team2);
-          const effectiveId2 = m.team2Id || dictId2 || 10000;
-          const raw2 = findRawMatches(m.team2, m.team2Id) || generateFallbackTeamMatches(m.team2, effectiveId2);
-          if (raw2 && raw2.length > 0) {
-            const filtered2 = filterTeamPastMatches(raw2, filters, m.team2, effectiveId2);
-            const emojis2 = calculateTeamEmojis(filtered2, filters.window || 5);
-            if (m.team2Id) forms[m.team2Id] = emojis2;
-            if (norm2) forms[norm2] = emojis2;
-            if (lower2) forms[lower2] = emojis2;
-            if (dictId2) forms[dictId2] = emojis2;
-          }
+        if (m.team2 && isTeamNameInFavorites(m.team2, allFavList)) {
+          processTeam(m.team2, m.team2Id, true);
         }
       });
     }
@@ -315,6 +288,16 @@ export default function App() {
   const [searchedTeams, setSearchedTeams] = useState<any[]>([]);
   const [isSearchingTeams, setIsSearchingTeams] = useState(false);
   const [selectedFavoritesCountry, setSelectedFavoritesCountry] = useState<string>('Todos');
+
+  // Memoized filtered favorites for 0ms lag when searching or changing country tab
+  const filteredFavorites = useMemo(() => {
+    const query = favoritesSearchQuery.toLowerCase().trim();
+    return supabaseFavorites.filter((c) => {
+      const matchQuery = !query || (c.name && c.name.toLowerCase().includes(query));
+      const matchCountry = selectedFavoritesCountry === 'Todos' || c.country === selectedFavoritesCountry;
+      return matchQuery && matchCountry;
+    });
+  }, [supabaseFavorites, favoritesSearchQuery, selectedFavoritesCountry]);
 
   // Search FotMob teams when query changes
   useEffect(() => {
@@ -563,257 +546,249 @@ export default function App() {
 
       {/* 2. MAIN 2-COLUMN CONTAINER, BALANÇO VIEW, SIMULADOR VIEW, RAIO-X VIEW, OR NOTIFICAÇÕES VIEW */}
       <main className="max-w-[1440px] w-full mx-auto px-2 sm:px-4 lg:px-6 py-4 flex-1">
-        {activeNavTab === 'balanco' ? (
-          <BalancoView
-            supabaseFavorites={supabaseFavorites}
-            teamForms={favoriteForms}
-            teamRawMatches={teamRawMatches}
-            dateMatches={dateMatches}
-            selectedDate={selectedDate}
-            filters={filters}
-            balancoData={balancoData}
-          />
-        ) : activeNavTab === 'simulador' ? (
-          <div className="w-full max-w-7xl mx-auto px-1 sm:px-4 py-4 animate-fade-in">
-            <SimuladorBanca
-              bets={balancoData.bets}
-              realInitialCapital={balancoData.initialCapital}
-              realStats={balancoData.stats}
-            />
-          </div>
-        ) : activeNavTab === 'raio-x' ? (
-          <div className="w-full max-w-7xl mx-auto px-1 sm:px-4 py-4 animate-fade-in">
-            <RelatorioConfrontos
-              bets={balancoData.bets}
+        <React.Suspense
+          fallback={
+            <div className="flex items-center justify-center min-h-[300px] w-full">
+              <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          }
+        >
+          {activeNavTab === 'balanco' ? (
+            <BalancoView
               supabaseFavorites={supabaseFavorites}
               teamForms={favoriteForms}
               teamRawMatches={teamRawMatches}
+              dateMatches={dateMatches}
+              selectedDate={selectedDate}
+              filters={filters}
+              balancoData={balancoData}
             />
-          </div>
-        ) : activeNavTab === 'notificacoes' ? (
-          <NotificacoesView />
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-3 items-start">
-            
-            {/* LEFT COLUMN: Todas as Ligas (Sticky alongside match cards) */}
-            <div className="hidden lg:block sticky top-16 max-h-[calc(100vh-80px)] overflow-y-auto no-scrollbar pr-0.5">
-              <LeftSidebar
-                selectedLeague={selectedLeague}
-                onSelectLeague={setSelectedLeague}
-                allLeaguesData={allLeaguesData}
+          ) : activeNavTab === 'simulador' ? (
+            <div className="w-full max-w-7xl mx-auto px-1 sm:px-4 py-4 animate-fade-in">
+              <SimuladorBanca
+                bets={balancoData.bets}
+                realInitialCapital={balancoData.initialCapital}
+                realStats={balancoData.stats}
               />
             </div>
-
-            {/* CENTER COLUMN: Main Content Area */}
-            <div className="w-full flex flex-col gap-4 min-w-0">
+          ) : activeNavTab === 'raio-x' ? (
+            <div className="w-full max-w-7xl mx-auto px-1 sm:px-4 py-4 animate-fade-in">
+              <RelatorioConfrontos
+                bets={balancoData.bets}
+                supabaseFavorites={supabaseFavorites}
+                teamForms={favoriteForms}
+                teamRawMatches={teamRawMatches}
+              />
+            </div>
+          ) : activeNavTab === 'notificacoes' ? (
+            <NotificacoesView />
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-3 items-start">
               
-              {/* If tab is 'matches', show StandingsTable if a league is selected, or MatchesCenterView for all day matches */}
-              {activeNavTab === 'matches' && (
-                selectedLeague ? (
-                  <StandingsTable
-                    standings={standings}
-                    selectedLeague={selectedLeague}
-                    onSelectTeam={handleSelectTeam}
-                    matches={leagueData.matches}
-                    onSelectMatch={(m) => setSelectedMatch(m)}
-                    onBackToMatches={() => setSelectedLeague(null)}
-                    isLoading={isLoading}
-                    teamForms={favoriteForms}
-                    supabaseFavorites={supabaseFavorites}
-                  />
-                ) : (
-                  <MatchesCenterView
-                    matches={dateMatches}
-                    selectedDate={selectedDate}
-                    onOpenCalendar={() => setIsCalendarOpen(true)}
-                    onPrevDate={handlePrevDate}
-                    onNextDate={handleNextDate}
-                    onSelectDate={(d) => setSelectedDate(d)}
-                    onSelectMatch={(m) => setSelectedMatch(m)}
-                    onSelectTeam={handleSelectTeam}
-                    isLoading={isDateMatchesLoading || isLoading}
-                    supabaseFavorites={supabaseFavorites}
-                    selectedLeague={selectedLeague}
-                    onSelectLeague={setSelectedLeague}
-                    onToggleFavorite={handleToggleFavorite}
-                    teamForms={favoriteForms}
-                    filters={filters}
-                    onFiltersChange={setFilters}
-                    onOpenAiAnalysis={(m) => setSelectedAiMatch(m)}
-                  />
-                )
-              )}
+              {/* LEFT COLUMN: Todas as Ligas (Sticky alongside match cards) */}
+              <div className="hidden lg:block sticky top-16 max-h-[calc(100vh-80px)] overflow-y-auto no-scrollbar pr-0.5">
+                <LeftSidebar
+                  selectedLeague={selectedLeague}
+                  onSelectLeague={setSelectedLeague}
+                  allLeaguesData={allLeaguesData}
+                />
+              </div>
 
-              {/* If tab is 'favorites', show Supabase Synchronized Favorites */}
-              {activeNavTab === 'favorites' && (
-                <div className="flex flex-col gap-4 animate-fade-in">
-                  
-                  {/* Header Back to Matches Banner */}
-                  <div className="bg-[#141414] rounded-xl border border-[#222222] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
-                    <div>
-                      <h2 className="text-base font-bold text-white flex items-center gap-2">
-                        <span className="text-yellow-400">★</span>
-                        <span>Meus Clubes Favoritos</span>
-                      </h2>
-                      <p className="text-xs text-zinc-400 mt-1">
-                        Gerencie sua lista de clubes favoritos. Clique na estrela de qualquer clube para desfavoritar.
-                      </p>
-                    </div>
+              {/* CENTER COLUMN: Main Content Area */}
+              <div className="w-full flex flex-col gap-4 min-w-0">
+                
+                {/* If tab is 'matches', show StandingsTable if a league is selected, or MatchesCenterView for all day matches */}
+                {activeNavTab === 'matches' && (
+                  selectedLeague ? (
+                    <StandingsTable
+                      standings={standings}
+                      selectedLeague={selectedLeague}
+                      onSelectTeam={handleSelectTeam}
+                      matches={leagueData.matches}
+                      onSelectMatch={(m) => setSelectedMatch(m)}
+                      onBackToMatches={() => setSelectedLeague(null)}
+                      isLoading={isLoading}
+                      teamForms={favoriteForms}
+                      supabaseFavorites={supabaseFavorites}
+                    />
+                  ) : (
+                    <MatchesCenterView
+                      matches={dateMatches}
+                      selectedDate={selectedDate}
+                      onOpenCalendar={() => setIsCalendarOpen(true)}
+                      onPrevDate={handlePrevDate}
+                      onNextDate={handleNextDate}
+                      onSelectDate={(d) => setSelectedDate(d)}
+                      onSelectMatch={(m) => setSelectedMatch(m)}
+                      onSelectTeam={handleSelectTeam}
+                      isLoading={isDateMatchesLoading || isLoading}
+                      supabaseFavorites={supabaseFavorites}
+                      selectedLeague={selectedLeague}
+                      onSelectLeague={setSelectedLeague}
+                      onToggleFavorite={handleToggleFavorite}
+                      teamForms={favoriteForms}
+                      filters={filters}
+                      onFiltersChange={setFilters}
+                      onOpenAiAnalysis={(m) => setSelectedAiMatch(m)}
+                    />
+                  )
+                )}
 
-                    <button
-                      id="btn-back-to-matches"
-                      onClick={() => setActiveNavTab('matches')}
-                      className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs transition-colors cursor-pointer shrink-0 shadow-md flex items-center justify-center gap-1.5"
-                    >
-                      <span>← Voltar para Jogos</span>
-                    </button>
-                  </div>
-
-                  {/* Filter and Search Bar for Favorites */}
-                  <div className="bg-[#141414] rounded-xl border border-[#222222] p-4 flex flex-col gap-3">
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      {/* Search Field */}
-                      <div className="relative flex-1">
-                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500 font-bold">🔍</span>
-                        <input
-                          type="text"
-                          placeholder="Filtrar clube favorito..."
-                          value={favoritesSearchQuery}
-                          onChange={(e) => setFavoritesSearchQuery(e.target.value)}
-                          className="w-full bg-[#1c1c1c] hover:bg-[#222222] focus:bg-[#242424] text-xs text-white placeholder-zinc-500 pl-9 pr-4 py-2 rounded-lg border border-[#262626] focus:border-zinc-700 outline-none transition-all"
-                        />
-                        {favoritesSearchQuery && (
-                          <button
-                            onClick={() => setFavoritesSearchQuery('')}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs"
-                          >
-                            ✕
-                          </button>
-                        )}
+                {/* If tab is 'favorites', show Supabase Synchronized Favorites */}
+                {activeNavTab === 'favorites' && (
+                  <div className="flex flex-col gap-4 animate-fade-in">
+                    
+                    {/* Header Back to Matches Banner */}
+                    <div className="bg-[#141414] rounded-xl border border-[#222222] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+                      <div>
+                        <h2 className="text-base font-bold text-white flex items-center gap-2">
+                          <span className="text-yellow-400">★</span>
+                          <span>Meus Clubes Favoritos</span>
+                        </h2>
+                        <p className="text-xs text-zinc-400 mt-1">
+                          Gerencie sua lista de clubes favoritos. Clique na estrela de qualquer clube para desfavoritar.
+                        </p>
                       </div>
 
-                      {/* Filter Pills */}
-                      <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1 sm:pb-0">
-                        {['Todos', 'Brasil', 'Inglaterra', 'Espanha', 'Itália', 'Alemanha'].map((country) => (
-                          <button
-                            key={country}
-                            onClick={() => setSelectedFavoritesCountry(country)}
-                            className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer ${
-                              selectedFavoritesCountry === country
-                                ? 'bg-emerald-500 text-black shadow-sm'
-                                : 'bg-[#1c1c1c] text-zinc-400 hover:text-white'
-                            }`}
-                          >
-                            {country}
-                          </button>
-                        ))}
-                      </div>
+                      <button
+                        id="btn-back-to-matches"
+                        onClick={() => setActiveNavTab('matches')}
+                        className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs transition-colors cursor-pointer shrink-0 shadow-md flex items-center justify-center gap-1.5"
+                      >
+                        <span>← Voltar para Jogos</span>
+                      </button>
                     </div>
 
-                    {/* Favorites Counter & Stats Info */}
-                    <div className="flex items-center justify-between text-[11px] text-zinc-400 font-medium px-1">
-                      <span>
-                        Mostrando{' '}
-                        <strong className="text-white">
-                          {
-                            supabaseFavorites.filter((c) => {
-                              const matchQuery = c.name.toLowerCase().includes(favoritesSearchQuery.toLowerCase());
-                              const matchCountry = selectedFavoritesCountry === 'Todos' || c.country === selectedFavoritesCountry;
-                              return matchQuery && matchCountry;
-                            }).length
-                          }
-                        </strong>{' '}
-                        de <strong className="text-white">{supabaseFavorites.length}</strong> favoritos salvos
-                      </span>
-
-                      <span className="text-[10px] text-emerald-400 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/40">
-                        Sincronização OK
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Clubs Bento Grid */}
-                    <div className="flex flex-col gap-6">
-                      {/* Existing Favorited Clubs */}
-                      <div className="flex flex-col gap-2">
-                        <div className="flex items-center justify-between px-1">
-                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-                            <span className="text-yellow-400">★</span> Meus Clubes Salvos
-                          </span>
-                          {supabaseFavorites.length > 0 && (
+                    {/* Filter and Search Bar for Favorites */}
+                    <div className="bg-[#141414] rounded-xl border border-[#222222] p-4 flex flex-col gap-3">
+                      <div className="flex flex-col sm:flex-row gap-3">
+                        {/* Search Field */}
+                        <div className="relative flex-1">
+                          <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500 font-bold">🔍</span>
+                          <input
+                            type="text"
+                            placeholder="Filtrar clube favorito..."
+                            value={favoritesSearchQuery}
+                            onChange={(e) => setFavoritesSearchQuery(e.target.value)}
+                            className="w-full bg-[#1c1c1c] hover:bg-[#222222] focus:bg-[#242424] text-xs text-white placeholder-zinc-500 pl-9 pr-4 py-2 rounded-lg border border-[#262626] focus:border-zinc-700 outline-none transition-all"
+                          />
+                          {favoritesSearchQuery && (
                             <button
-                              id="btn-clear-all-favorites"
-                              onClick={handleClearAllFavorites}
-                              className="text-[10px] font-bold text-red-400 hover:text-red-300 bg-red-950/20 hover:bg-red-950/40 px-2 py-1 rounded border border-red-900/30 transition-colors cursor-pointer"
+                              onClick={() => setFavoritesSearchQuery('')}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs"
                             >
-                              Limpar Todos
+                              ✕
                             </button>
                           )}
                         </div>
 
-                        {supabaseFavorites.filter((c) => {
-                          const matchQuery = c.name.toLowerCase().includes(favoritesSearchQuery.toLowerCase());
-                          const matchCountry = selectedFavoritesCountry === 'Todos' || c.country === selectedFavoritesCountry;
-                          return matchQuery && matchCountry;
-                        }).length === 0 ? (
-                          <div className="bg-[#141414] rounded-xl border border-[#222222] p-8 text-center text-xs text-zinc-400">
-                            Nenhum clube salvo encontrado para esta busca ou filtro.
-                          </div>
-                        ) : (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                            {supabaseFavorites
-                              .filter((c) => {
-                                const matchQuery = c.name.toLowerCase().includes(favoritesSearchQuery.toLowerCase());
-                                const matchCountry = selectedFavoritesCountry === 'Todos' || c.country === selectedFavoritesCountry;
-                                return matchQuery && matchCountry;
-                              })
-                              .map((club, idx) => (
-                                <div
-                                  key={`saved-${club.id}-${club.name}-${idx}`}
-                                  id={`supabase-fav-club-${club.id}`}
-                                  className="bg-[#141414] hover:bg-[#1a1a1a] border border-[#222222] hover:border-zinc-700 p-3.5 rounded-xl transition-all flex items-center justify-between group"
-                                >
-                                  <div
-                                    onClick={() => handleSelectTeam(club.name, club.id)}
-                                    className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
-                                  >
-                                    <TeamCrest teamName={club.name} teamId={club.id} size={36} className="shrink-0" />
-                                    <div className="flex flex-col min-w-0">
-                                      <span className="text-xs font-bold text-white group-hover:text-emerald-400 transition-colors truncate">
-                                        {club.name}
-                                      </span>
-                                      <span className="text-[10px] text-zinc-400 mt-0.5 font-medium truncate">
-                                        {club.country} • {club.league || 'Liga Principal'}
-                                      </span>
-                                    </div>
-                                  </div>
+                        {/* Filter Pills */}
+                        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none pb-1 sm:pb-0">
+                          {['Todos', 'Brasil', 'Inglaterra', 'Espanha', 'Itália', 'Alemanha'].map((country) => (
+                            <button
+                              key={country}
+                              onClick={() => setSelectedFavoritesCountry(country)}
+                              className={`px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer ${
+                                selectedFavoritesCountry === country
+                                  ? 'bg-emerald-500 text-black shadow-sm'
+                                  : 'bg-[#1c1c1c] text-zinc-400 hover:text-white'
+                              }`}
+                            >
+                              {country}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
 
-                                  {/* Interactive Unfavorite Button */}
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleToggleFavorite(club);
-                                    }}
-                                    className="ml-2 px-2 py-1 rounded-lg bg-yellow-500/10 hover:bg-rose-500/20 border border-yellow-500/30 hover:border-rose-500/40 text-yellow-400 hover:text-rose-400 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 shrink-0"
-                                    title="Clique para desfavoritar este clube"
-                                  >
-                                    <span className="fill-current text-yellow-400">★</span>
-                                    <span className="text-[10px]">Favorito</span>
-                                  </button>
-                                </div>
-                              ))}
-                          </div>
-                        )}
+                      {/* Favorites Counter & Stats Info */}
+                      <div className="flex items-center justify-between text-[11px] text-zinc-400 font-medium px-1">
+                        <span>
+                          Mostrando{' '}
+                          <strong className="text-white">
+                            {filteredFavorites.length}
+                          </strong>{' '}
+                          de <strong className="text-white">{supabaseFavorites.length}</strong> favoritos salvos
+                        </span>
+
+                        <span className="text-[10px] text-emerald-400 bg-emerald-950/30 px-2 py-0.5 rounded border border-emerald-900/40">
+                          Sincronização OK
+                        </span>
                       </div>
                     </div>
 
-                </div>
-              )}
+                    {/* Clubs Bento Grid */}
+                      <div className="flex flex-col gap-6">
+                        {/* Existing Favorited Clubs */}
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center justify-between px-1">
+                            <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
+                              <span className="text-yellow-400">★</span> Meus Clubes Salvos
+                            </span>
+                            {supabaseFavorites.length > 0 && (
+                              <button
+                                id="btn-clear-all-favorites"
+                                onClick={handleClearAllFavorites}
+                                className="text-[10px] font-bold text-red-400 hover:text-red-300 bg-red-950/20 hover:bg-red-950/40 px-2 py-1 rounded border border-red-900/30 transition-colors cursor-pointer"
+                              >
+                                Limpar Todos
+                              </button>
+                            )}
+                          </div>
+
+                          {filteredFavorites.length === 0 ? (
+                            <div className="bg-[#141414] rounded-xl border border-[#222222] p-8 text-center text-xs text-zinc-400">
+                              Nenhum clube salvo encontrado para esta busca ou filtro.
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                              {filteredFavorites.map((club, idx) => (
+                                  <div
+                                    key={`saved-${club.id}-${club.name}-${idx}`}
+                                    id={`supabase-fav-club-${club.id}`}
+                                    className="bg-[#141414] hover:bg-[#1a1a1a] border border-[#222222] hover:border-zinc-700 p-3.5 rounded-xl transition-all flex items-center justify-between group"
+                                  >
+                                    <div
+                                      onClick={() => handleSelectTeam(club.name, club.id)}
+                                      className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer"
+                                    >
+                                      <TeamCrest teamName={club.name} teamId={club.id} size={36} className="shrink-0" />
+                                      <div className="flex flex-col min-w-0">
+                                        <span className="text-xs font-bold text-white group-hover:text-emerald-400 transition-colors truncate">
+                                          {club.name}
+                                        </span>
+                                        <span className="text-[10px] text-zinc-400 mt-0.5 font-medium truncate">
+                                          {club.country} • {club.league || 'Liga Principal'}
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {/* Interactive Unfavorite Button */}
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleToggleFavorite(club);
+                                      }}
+                                      className="ml-2 px-2 py-1 rounded-lg bg-yellow-500/10 hover:bg-rose-500/20 border border-yellow-500/30 hover:border-rose-500/40 text-yellow-400 hover:text-rose-400 text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                                      title="Clique para desfavoritar este clube"
+                                    >
+                                      <span className="fill-current text-yellow-400">★</span>
+                                      <span className="text-[10px]">Favorito</span>
+                                    </button>
+                                  </div>
+                                ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                  </div>
+                )}
+
+              </div>
 
             </div>
-
-          </div>
-        )}
+          )}
+        </React.Suspense>
       </main>
 
       {/* 3. MOBILE SIDEBAR DRAWER */}
@@ -844,71 +819,74 @@ export default function App() {
       )}
 
       {/* 4. MODALS */}
-      
-      {/* Calendar Date Picker Modal (Screenshot 7) */}
-      <CalendarPickerModal
-        isOpen={isCalendarOpen}
-        onClose={() => setIsCalendarOpen(false)}
-        selectedDate={selectedDate}
-        onSelectDate={(d) => setSelectedDate(d)}
-      />
+      <React.Suspense fallback={null}>
+        {/* Calendar Date Picker Modal (Screenshot 7) */}
+        {isCalendarOpen && (
+          <CalendarPickerModal
+            isOpen={isCalendarOpen}
+            onClose={() => setIsCalendarOpen(false)}
+            selectedDate={selectedDate}
+            onSelectDate={(d) => setSelectedDate(d)}
+          />
+        )}
 
-      {/* Match Detail Modal (Screenshots 5 & 8) */}
-      {selectedMatch && (
-        <MatchDetailModal
-          match={selectedMatch}
-          onClose={() => setSelectedMatch(null)}
-          onSelectTeam={handleSelectTeam}
-        />
-      )}
+        {/* Match Detail Modal (Screenshots 5 & 8) */}
+        {selectedMatch && (
+          <MatchDetailModal
+            match={selectedMatch}
+            onClose={() => setSelectedMatch(null)}
+            onSelectTeam={handleSelectTeam}
+          />
+        )}
 
-      {/* Team Detail Modal (Screenshot 6) */}
-      {selectedTeam && (
-        <TeamDetailModal
-          teamName={selectedTeam.name}
-          teamId={selectedTeam.id}
-          onClose={() => setSelectedTeam(null)}
-          favorites={supabaseFavorites}
-          onToggleFavorite={handleToggleFavorite}
-          filters={filters}
-          onFiltersChange={setFilters}
-          rawMatches={
-            (selectedTeam.id && teamRawMatches[selectedTeam.id]) ||
-            teamRawMatches[normalizeTeamName(selectedTeam.name)] ||
-            teamRawMatches[selectedTeam.name.toLowerCase().trim()] ||
-            (getTeamId(selectedTeam.name) && teamRawMatches[getTeamId(selectedTeam.name)!])
-          }
-          onUpdateTeamMatches={(tId, matches, optName) => {
-            setTeamRawMatches((prev) => {
-              const next = { ...prev };
-              if (tId) next[tId] = matches;
-              if (optName) {
-                const norm = normalizeTeamName(optName);
-                if (norm) next[norm] = matches;
-                const low = optName.toLowerCase().trim();
-                if (low) next[low] = matches;
-              }
-              const selNorm = normalizeTeamName(selectedTeam.name);
-              if (selNorm) next[selNorm] = matches;
-              const selLow = selectedTeam.name.toLowerCase().trim();
-              if (selLow) next[selLow] = matches;
-              return next;
-            });
-          }}
-        />
-      )}
+        {/* Team Detail Modal (Screenshot 6) */}
+        {selectedTeam && (
+          <TeamDetailModal
+            teamName={selectedTeam.name}
+            teamId={selectedTeam.id}
+            onClose={() => setSelectedTeam(null)}
+            favorites={supabaseFavorites}
+            onToggleFavorite={handleToggleFavorite}
+            filters={filters}
+            onFiltersChange={setFilters}
+            rawMatches={
+              (selectedTeam.id && teamRawMatches[selectedTeam.id]) ||
+              teamRawMatches[normalizeTeamName(selectedTeam.name)] ||
+              teamRawMatches[selectedTeam.name.toLowerCase().trim()] ||
+              (getTeamId(selectedTeam.name) && teamRawMatches[getTeamId(selectedTeam.name)!])
+            }
+            onUpdateTeamMatches={(tId, matches, optName) => {
+              setTeamRawMatches((prev) => {
+                const next = { ...prev };
+                if (tId) next[tId] = matches;
+                if (optName) {
+                  const norm = normalizeTeamName(optName);
+                  if (norm) next[norm] = matches;
+                  const low = optName.toLowerCase().trim();
+                  if (low) next[low] = matches;
+                }
+                const selNorm = normalizeTeamName(selectedTeam.name);
+                if (selNorm) next[selNorm] = matches;
+                const selLow = selectedTeam.name.toLowerCase().trim();
+                if (selLow) next[selLow] = matches;
+                return next;
+              });
+            }}
+          />
+        )}
 
-      {/* AI Analysis Modal */}
-      {selectedAiMatch && (
-        <AiAnalysisModal
-          isOpen={!!selectedAiMatch}
-          onClose={() => setSelectedAiMatch(null)}
-          match={selectedAiMatch}
-          standings={standings}
-          allMatches={leagueData.matches}
-          leagueName={leagueData.name}
-        />
-      )}
+        {/* AI Analysis Modal */}
+        {selectedAiMatch && (
+          <AiAnalysisModal
+            isOpen={!!selectedAiMatch}
+            onClose={() => setSelectedAiMatch(null)}
+            match={selectedAiMatch}
+            standings={standings}
+            allMatches={leagueData.matches}
+            leagueName={leagueData.name}
+          />
+        )}
+      </React.Suspense>
 
     </div>
   );

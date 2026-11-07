@@ -21,11 +21,16 @@ export interface OfficialMatchResult {
   source: 'direct' | 'dateMatches' | 'teamRaw' | 'none';
 }
 
+const normForMatchingCache = new Map<string, string>();
+
 /**
  * Canonical normalizer for robust club name matching across sources
  */
 export function normalizeTeamForMatching(name: string): string {
   if (!name) return '';
+  const cached = normForMatchingCache.get(name);
+  if (cached !== undefined) return cached;
+
   let s = name
     .toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -35,24 +40,24 @@ export function normalizeTeamForMatching(name: string): string {
     .trim();
 
   // Canonicalize common Brazilian and international team aliases
-  if (s === 'atletico mg' || s === 'atletico mineiro' || s === 'cam') return 'atletico mineiro';
-  if (s === 'athletico pr' || s === 'athletico paranaense' || s === 'atletico pr' || s === 'cap') return 'athletico paranaense';
-  if (s === 'america mg' || s === 'america mineiro') return 'america mineiro';
-  if (s === 'america rn' || s === 'america de natal') return 'america de natal';
-  if (s === 'botafogo sp' || s === 'botafogo ribeirao preto') return 'botafogo sp';
-  if (s === 'botafogo pb' || s === 'botafogo da paraiba') return 'botafogo pb';
-  if (s === 'bragantino' || s === 'red bull bragantino') return 'bragantino';
-  if (s === 'sporting' || s === 'sporting cp' || s === 'sporting lisboa' || s === 'sporting clube de portugal') return 'sporting cp';
-  if (s === 'psg' || s === 'paris saint germain' || s === 'paris') return 'psg';
-  if (s === 'bayern' || s === 'bayern munchen' || s === 'bayern munich') return 'bayern munich';
-  if (s === 'inter' || s === 'inter milan' || s === 'internazionale' || s === 'inter de milao') return 'inter milan';
-  if (s === 'inter miami' || s === 'inter miami cf') return 'inter miami';
-  if (s === 'man city' || s === 'manchester city') return 'manchester city';
-  if (s === 'man utd' || s === 'man utd fc' || s === 'manchester united') return 'manchester united';
-  if (s === 'barcelona' || s === 'fc barcelona') return 'barcelona';
-  if (s === 'barcelona sc' || s === 'barcelona guayaquil') return 'barcelona sc';
-  if (s === 'real madrid') return 'real madrid';
-  if (s === 'atletico madrid' || s === 'atletico de madrid') return 'atletico madrid';
+  if (s === 'atletico mg' || s === 'atletico mineiro' || s === 'cam') s = 'atletico mineiro';
+  else if (s === 'athletico pr' || s === 'athletico paranaense' || s === 'atletico pr' || s === 'cap') s = 'athletico paranaense';
+  else if (s === 'america mg' || s === 'america mineiro') s = 'america mineiro';
+  else if (s === 'america rn' || s === 'america de natal') s = 'america de natal';
+  else if (s === 'botafogo sp' || s === 'botafogo ribeirao preto') s = 'botafogo sp';
+  else if (s === 'botafogo pb' || s === 'botafogo da paraiba') s = 'botafogo pb';
+  else if (s === 'bragantino' || s === 'red bull bragantino') s = 'bragantino';
+  else if (s === 'sporting' || s === 'sporting cp' || s === 'sporting lisboa' || s === 'sporting clube de portugal') s = 'sporting cp';
+  else if (s === 'psg' || s === 'paris saint germain' || s === 'paris') s = 'psg';
+  else if (s === 'bayern' || s === 'bayern munchen' || s === 'bayern munich') s = 'bayern munich';
+  else if (s === 'inter' || s === 'inter milan' || s === 'internazionale' || s === 'inter de milao') s = 'inter milan';
+  else if (s === 'inter miami' || s === 'inter miami cf') s = 'inter miami';
+  else if (s === 'man city' || s === 'manchester city') s = 'manchester city';
+  else if (s === 'man utd' || s === 'man utd fc' || s === 'manchester united') s = 'manchester united';
+  else if (s === 'barcelona' || s === 'fc barcelona') s = 'barcelona';
+  else if (s === 'barcelona sc' || s === 'barcelona guayaquil') s = 'barcelona sc';
+  else if (s === 'real madrid') s = 'real madrid';
+  else if (s === 'atletico madrid' || s === 'atletico de madrid') s = 'atletico madrid';
 
   // State abbreviations normalization
   s = s.replace(/\bmg\b/g, 'mineiro')
@@ -66,6 +71,7 @@ export function normalizeTeamForMatching(name: string): string {
        .replace(/\s+/g, ' ')
        .trim();
 
+  normForMatchingCache.set(name, s);
   return s;
 }
 

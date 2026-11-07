@@ -132,55 +132,107 @@ export const USER_FAVORITE_CLUBS_DATA: { id: number; name: string; country: stri
   { id: 101899, name: 'Al-Arabi', country: 'Catar', league: 'Stars League' },
 ];
 
-export const isTeamNameInFavorites = (teamName: string, favoritesData?: any[]): boolean => {
-  if (!teamName) return false;
-  const favList = favoritesData && favoritesData.length > 0 ? favoritesData : USER_FAVORITE_CLUBS_DATA;
-  const normalizedSearch = normalizeTeamName(teamName);
-
-  return favList.some(f => {
-    const favNorm = normalizeTeamName(f.name);
-    if (favNorm === normalizedSearch) return true;
-
-    // Strict, collision-free aliases
-    if (favNorm === 'az alkmaar' && (normalizedSearch === 'az' || normalizedSearch === 'az alkmaar')) return true;
-    if (favNorm === 'psg' && (normalizedSearch === 'paris saint germain' || normalizedSearch === 'paris saint-germain' || normalizedSearch === 'psg' || normalizedSearch === 'paris')) return true;
-    if (favNorm === 'bayern munich' && (normalizedSearch === 'bayern' || normalizedSearch === 'bayern munchen' || normalizedSearch === 'bayern munich')) return true;
-    if ((favNorm === 'sporting cp' || favNorm === 'sporting') && (normalizedSearch === 'sporting cp' || normalizedSearch === 'sporting' || normalizedSearch === 'sporting lisboa' || normalizedSearch === 'sporting clube de portugal')) return true;
-    if (favNorm === 'atletico madrid' && (normalizedSearch === 'atletico de madrid' || normalizedSearch === 'atletico madrid')) return true;
-    if (favNorm === 'olympique marseille' && (normalizedSearch === 'marseille' || normalizedSearch === 'olympique de marseille')) return true;
-    if (favNorm === 'djurgardens if' && (normalizedSearch === 'djurgarden' || normalizedSearch === 'djurgardens if')) return true;
-    if (favNorm === 'hjk helsinki' && (normalizedSearch === 'hjk' || normalizedSearch === 'hjk helsinki')) return true;
-    if (favNorm === 'bohemians' && (normalizedSearch === 'bohemian' || normalizedSearch === 'bohemian fc' || normalizedSearch === 'bohemians dublin')) return true;
-    if (favNorm === 'inter miami' && (normalizedSearch === 'inter miami cf' || normalizedSearch === 'inter miami')) return true;
-    if (favNorm === 'inter milan' && (normalizedSearch === 'inter de milao' || normalizedSearch === 'internazionale' || normalizedSearch === 'inter milan')) return true;
-    if (favNorm === 'al nassr' && (normalizedSearch === 'al nassr fc' || normalizedSearch === 'al-nassr')) return true;
-    if (favNorm === 'al hilal' && (normalizedSearch === 'al hilal saudi' || normalizedSearch === 'al-hilal')) return true;
-    if (favNorm === 'al ittihad' && (normalizedSearch === 'al-ittihad' || normalizedSearch === 'al ittihad club')) return true;
-    if (favNorm === 'al ahli' && (normalizedSearch === 'al-ahli' || normalizedSearch === 'al ahli saudi')) return true;
-    if (favNorm === 'al ahly' && (normalizedSearch === 'al ahly sc' || normalizedSearch === 'al-ahly')) return true;
-    if ((favNorm === 'al arabi' || favNorm === 'al-arabi') && (normalizedSearch === 'al arabi' || normalizedSearch === 'al-arabi' || normalizedSearch === 'al arabi sc' || normalizedSearch === 'al-arabi sc')) return true;
-    if ((favNorm === 'barcelona sc' || favNorm === 'barcelona') && (normalizedSearch === 'barcelona sc' || normalizedSearch === 'barcelona guayaquil' || normalizedSearch === 'barcelona')) return true;
-    if (favNorm === 'nacional' && (normalizedSearch === 'club nacional de football' || normalizedSearch === 'nacional de montevideo' || normalizedSearch === 'nacional uru')) return true;
-
-    return false;
-  });
-};
+// High-speed normalization cache (0ms for repeat lookups)
+const normTeamCache = new Map<string, string>();
 
 export const normalizeTeamName = (name: string): string => {
-  const clean = (name || '')
+  if (!name) return '';
+  const cached = normTeamCache.get(name);
+  if (cached !== undefined) return cached;
+
+  const clean = name
     .toLowerCase()
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .trim();
 
+  let res: string;
   if (clean === 'barcelona sc' || clean === 'barcelona s.c.' || clean === 'barcelona guayaquil') {
-    return 'barcelona sc';
-  }
-  if (clean === 'al-arabi' || clean === 'al arabi' || clean === 'al-arabi sc' || clean === 'al arabi sc') {
-    return 'al-arabi';
+    res = 'barcelona sc';
+  } else if (clean === 'al-arabi' || clean === 'al arabi' || clean === 'al-arabi sc' || clean === 'al arabi sc') {
+    res = 'al-arabi';
+  } else {
+    res = clean
+      .replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
-  return clean
-    .replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  normTeamCache.set(name, res);
+  return res;
+};
+
+// Known alias mapping for instant O(1) lookups
+const KNOWN_FAV_ALIASES: Record<string, string[]> = {
+  'az alkmaar': ['az', 'az alkmaar'],
+  'psg': ['paris saint germain', 'paris saint-germain', 'psg', 'paris'],
+  'bayern munich': ['bayern', 'bayern munchen', 'bayern munich'],
+  'sporting cp': ['sporting cp', 'sporting', 'sporting lisboa', 'sporting clube de portugal'],
+  'sporting': ['sporting cp', 'sporting', 'sporting lisboa', 'sporting clube de portugal'],
+  'atletico madrid': ['atletico de madrid', 'atletico madrid'],
+  'olympique marseille': ['marseille', 'olympique de marseille'],
+  'djurgardens if': ['djurgarden', 'djurgardens if'],
+  'hjk helsinki': ['hjk', 'hjk helsinki'],
+  'bohemians': ['bohemian', 'bohemian fc', 'bohemians dublin'],
+  'inter miami': ['inter miami cf', 'inter miami'],
+  'inter milan': ['inter de milao', 'internazionale', 'inter milan'],
+  'al nassr': ['al nassr fc', 'al-nassr'],
+  'al hilal': ['al hilal saudi', 'al-hilal'],
+  'al ittihad': ['al-ittihad', 'al ittihad club'],
+  'al ahli': ['al-ahli', 'al ahli saudi'],
+  'al ahly': ['al ahly sc', 'al-ahly'],
+  'al arabi': ['al arabi', 'al-arabi', 'al arabi sc', 'al-arabi sc'],
+  'al-arabi': ['al arabi', 'al-arabi', 'al arabi sc', 'al-arabi sc'],
+  'barcelona sc': ['barcelona sc', 'barcelona guayaquil', 'barcelona'],
+  'barcelona': ['barcelona sc', 'barcelona guayaquil', 'barcelona'],
+  'nacional': ['club nacional de football', 'nacional de montevideo', 'nacional uru'],
+};
+
+// Build a fast lookup Set for a given list of favorite clubs
+function buildFavLookupSet(favList: any[]): Set<string> {
+  const set = new Set<string>();
+  for (let i = 0; i < favList.length; i++) {
+    const f = favList[i];
+    if (!f || !f.name) continue;
+    const norm = normalizeTeamName(f.name);
+    if (norm) {
+      set.add(norm);
+      const aliases = KNOWN_FAV_ALIASES[norm];
+      if (aliases) {
+        for (let j = 0; j < aliases.length; j++) {
+          set.add(aliases[j]);
+        }
+      }
+    }
+  }
+  return set;
+}
+
+// Precomputed static set for default USER_FAVORITE_CLUBS_DATA
+const DEFAULT_FAV_SET = buildFavLookupSet(USER_FAVORITE_CLUBS_DATA);
+const favListCache = new WeakMap<any[], Set<string>>();
+
+export const isTeamNameInFavorites = (teamName: string, favoritesData?: any[]): boolean => {
+  if (!teamName) return false;
+  const favList = favoritesData && favoritesData.length > 0 ? favoritesData : null;
+  
+  let lookupSet: Set<string>;
+  if (!favList) {
+    lookupSet = DEFAULT_FAV_SET;
+  } else {
+    let cachedSet = favListCache.get(favList);
+    if (!cachedSet) {
+      cachedSet = buildFavLookupSet(favList);
+      favListCache.set(favList, cachedSet);
+    }
+    lookupSet = cachedSet;
+  }
+
+  const normalizedSearch = normalizeTeamName(teamName);
+  if (lookupSet.has(normalizedSearch)) return true;
+  
+  // Also check raw lower-cased version in case alias contains special chars
+  const lowerSearch = teamName.toLowerCase().trim();
+  if (lookupSet.has(lowerSearch)) return true;
+
+  return false;
 };
