@@ -1,13 +1,10 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   FileText,
   AlertTriangle,
   CheckCircle2,
   XCircle,
   Clock,
-  Layers,
-  Search,
-  Filter,
   TrendingDown,
   TrendingUp,
   ShieldAlert,
@@ -19,693 +16,165 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
-  Share2,
   Copy,
   Check,
+  Search,
+  Filter,
+  Flame,
+  Award,
+  Layers,
+  BarChart3,
+  ListFilter,
+  CheckCircle,
+  HelpCircle,
+  Zap,
   Globe,
   SlidersHorizontal,
-  Flame,
+  Compass,
+  BookOpen,
 } from 'lucide-react';
-import { BetItem, BetLeg, BetLegStatus, MatchItem } from '../types';
-import { resolveMatchLeague } from '../utils/leagueResolver';
-import { normalizeTeamName, USER_FAVORITE_CLUBS_DATA } from '../data/favoriteClubs';
+import { BetItem } from '../types';
 import {
-  getOrComputeTeamEmojis,
-  getEndingFireStreak,
-  getEndingLossStreak,
-} from '../utils/competitionFilter';
+  MASTER_RAIO_X_SUMMARY,
+  MASTER_RAIO_X_TICKETS,
+  MASTER_RAIO_X_LEAGUES,
+  MASTER_RAIO_X_CLUBS,
+  MASTER_TOP_ASSERTIVE_CLUBS,
+  MASTER_HIGH_RISK_CLUBS,
+  EXTERNAL_RESEARCH_LEAGUES,
+  EXTERNAL_PROSPECTIVE_CLUBS,
+  MasterTicket,
+  MasterLeagueItem,
+  MasterClubItem,
+} from '../data/raioXMasterData';
+import { RAIO_X_DETAILED_REDS, RAIO_X_ERROR_PATTERNS, RAIO_X_GREEN_PATTERNS, RAIO_X_STRATEGIC_PLAN } from '../data/raioXDetailedAnalysis';
 
 interface RelatorioConfrontosProps {
-  bets: BetItem[];
+  bets?: BetItem[];
   supabaseFavorites?: { id: number; name: string; country?: string; league?: string }[];
   teamForms?: Record<string | number, string[]>;
-  teamRawMatches?: Record<string | number, MatchItem[]>;
-}
-
-export interface EnrichedLeg {
-  id: string;
-  matchId?: string;
-  betId: string;
-  betDate: string;
-  betFormat: string;
-  betOdd: number;
-  betAmount: number;
-  betStatus: string;
-  matchTitle: string;
-  team1: string;
-  team2: string;
-  market: string;
-  marketLabel: string;
-  status: BetLegStatus;
-  score: { ft: [number, number] } | null;
-  settledScore: [number, number] | null;
-  totalGoals: number | null;
-  matchStatus?: string;
-  time?: string;
-  league: string;
-  country: string;
-  isExotic: boolean;
-  tier: string;
-  redReason?: string;
-  fireStreak: number;
-  lossStreak: number;
-  hasFireStreak: boolean;
-  hasLossStreak: boolean;
-  isDoubleChance: boolean;
-  emojis1?: string[];
-  emojis2?: string[];
+  teamRawMatches?: Record<string | number, any[]>;
 }
 
 export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = React.memo(({
-  bets,
-  supabaseFavorites,
-  teamForms,
-  teamRawMatches,
+  bets = [],
 }) => {
-  // Filtros de visualização
-  const [selectedStatus, setSelectedStatus] = useState<'all' | 'red' | 'green' | 'pending'>('all');
-  const [selectedLeague, setSelectedLeague] = useState<string>('all');
-  const [filterTeam, setFilterTeam] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [activeAnalysisView, setActiveAnalysisView] = useState<'geral' | 'ligas' | 'times'>('geral');
+  // 8 Seções Obrigatórias bem definidas
+  const [activeTab, setActiveTab] = useState<
+    | 'visao-geral'
+    | 'analise-greens'
+    | 'analise-reds'
+    | 'ranking-ligas'
+    | 'ranking-clubes'
+    | 'clubes-recomendados'
+    | 'clubes-evitar'
+    | 'recomendacoes-estrategicas'
+  >('visao-geral');
+
+  // Filtros da Visão Geral / Explorador Geral de Jogos
+  const [ticketSearch, setTicketSearch] = useState<string>('');
+  const [ticketStatusFilter, setTicketStatusFilter] = useState<'all' | 'Ganha' | 'Perdida' | 'Pendente'>('all');
+  const [ticketMonthFilter, setTicketMonthFilter] = useState<'all' | '2026-09' | '2026-10' | '2026-11'>('all');
+  const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
+
+  // Filtros do Ranking de Ligas
+  const [leagueSearch, setLeagueSearch] = useState<string>('');
+  const [leagueFilter, setLeagueFilter] = useState<'all' | 'RECOMENDADA' | 'NEUTRA' | 'EVITAR'>('all');
+
+  // Filtros do Ranking de Clubes
+  const [clubSearch, setClubSearch] = useState<string>('');
+  const [clubFilter, setClubFilter] = useState<'all' | 'MAIOR_ASSERTIVIDADE' | 'RISCO_RED' | 'EM_OBSERVACAO'>('all');
+
+  // Estado de feedback de cópia
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Novos filtros por Método (Foguinhos e Derrotas) e Mercado (Dupla Chance)
-  const [selectedMethod, setSelectedMethod] = useState<'all' | 'any_fire' | 'fire_1' | 'fire_2' | 'fire_3_plus' | 'loss'>('all');
-  const [selectedMarket, setSelectedMarket] = useState<'all' | 'double_chance' | 'over_1_5' | 'winner'>('all');
-
-  // Estados de Recolher/Expandir e Visualização Detalhada
-  const [isExplorarExpanded, setIsExplorarExpanded] = useState<boolean>(true);
-  const [showAllRedsLeagues, setShowAllRedsLeagues] = useState<boolean>(false);
-  const [showAllRedsTeams, setShowAllRedsTeams] = useState<boolean>(false);
-  const explorarSectionRef = useRef<HTMLDivElement>(null);
-
-  // 1. Extração e Enriquecimento de TODOS os confrontos (pernas) de dentro de todos os bilhetes
-  const allConfrontos = useMemo<EnrichedLeg[]>(() => {
-    const list: EnrichedLeg[] = [];
-    const allFavList =
-      supabaseFavorites && supabaseFavorites.length > 0
-        ? supabaseFavorites
-        : USER_FAVORITE_CLUBS_DATA;
-
-    bets.forEach((bet) => {
-      const legs = bet.legs || [];
-
-      // Se o bilhete não tiver pernas explícitas, gerar pernas virtuais a partir do título para não perder nenhum jogo
-      if (legs.length === 0 && bet.title) {
-        const rawGames = bet.title.split(/\s*\+\s*/);
-        rawGames.forEach((rg, idx) => {
-          const parts = rg.split(/\s+(?:x|vs|v)\s+/i);
-          const t1 = parts[0]?.trim() || 'Mandante';
-          const t2 = parts[1]?.trim() || 'Visitante';
-          const resolved = resolveMatchLeague({ matchTitle: rg, team1: t1, team2: t2 }, supabaseFavorites);
-          const legStatus: BetLegStatus =
-            bet.status === 'Ganha' ? 'green' : bet.status === 'Perdida' ? 'red' : 'pending';
-
-          const emojis1 = getOrComputeTeamEmojis(t1, undefined, teamForms, undefined, allFavList);
-          const emojis2 = getOrComputeTeamEmojis(t2, undefined, teamForms, undefined, allFavList);
-          const streakFire1 = getEndingFireStreak(emojis1);
-          const streakLoss1 = getEndingLossStreak(emojis1);
-          const streakFire2 = getEndingFireStreak(emojis2);
-          const streakLoss2 = getEndingLossStreak(emojis2);
-          const fireStreak = Math.max(streakFire1, streakFire2);
-          const lossStreak = Math.max(streakLoss1, streakLoss2);
-
-          const isDoubleChance = /dupla|x1|x2/i.test(bet.title || '') || /dupla|x1|x2/i.test(rg);
-
-          let redReason = '';
-          if (legStatus === 'red') {
-            if (isDoubleChance) {
-              redReason = 'Resultado não satisfez a Dupla Chance';
-            } else {
-              redReason = 'Linha de Mais de 1.5 não satisfeita';
-            }
-          }
-
-          list.push({
-            id: `${bet.id}-virtual-${idx}`,
-            betId: bet.id,
-            betDate: bet.date || '',
-            betFormat: bet.format || 'Simples',
-            betOdd: bet.odd,
-            betAmount: bet.amount,
-            betStatus: bet.status,
-            matchTitle: `${t1} x ${t2}`,
-            team1: t1,
-            team2: t2,
-            market: isDoubleChance ? 'DC_1X' : 'OVER_1_5',
-            marketLabel: isDoubleChance ? 'Dupla Chance' : 'Mais de 1.5 gols',
-            status: legStatus,
-            score: null,
-            settledScore: null,
-            totalGoals: null,
-            league: resolved.league,
-            country: resolved.country,
-            isExotic: resolved.isExotic,
-            tier: resolved.tier,
-            redReason,
-            fireStreak,
-            lossStreak,
-            hasFireStreak: fireStreak >= 1,
-            hasLossStreak: lossStreak >= 1,
-            isDoubleChance,
-            emojis1,
-            emojis2,
-          });
-        });
-        return;
-      }
-
-      legs.forEach((leg, legIdx) => {
-        let t1 = leg.team1 || '';
-        let t2 = leg.team2 || '';
-        if ((!t1 || !t2) && leg.matchTitle) {
-          const parts = leg.matchTitle.split(/\s+(?:x|vs|v)\s+/i);
-          if (parts.length >= 2) {
-            t1 = t1 || parts[0].trim();
-            t2 = t2 || parts[1].trim();
-          }
-        }
-
-        const resolved = resolveMatchLeague(
-          {
-            matchTitle: leg.matchTitle,
-            team1: t1,
-            team2: t2,
-            league: leg.league,
-            competition: leg.competition,
-            leagueName: leg.leagueName,
-          },
-          supabaseFavorites
-        );
-
-        let totalGoals: number | null = null;
-        const score = leg.score?.ft || leg.settledScore;
-        if (score && Array.isArray(score) && score.length >= 2) {
-          totalGoals = Number(score[0]) + Number(score[1]);
-        }
-
-        // Identificação de Dupla Chance
-        const isDoubleChance =
-          leg.market === 'DC_1X' ||
-          leg.market === 'DC_X1' ||
-          leg.market === 'DC_X2' ||
-          leg.market === 'DC_12' ||
-          (typeof leg.market === 'string' && leg.market.startsWith('DC_')) ||
-          (typeof leg.marketLabel === 'string' && /dupla|x1|x2|ou empate/i.test(leg.marketLabel)) ||
-          (/dupla|x1|x2/i.test(leg.matchTitle || ''));
-
-        // Cálculo de Método (Foguinhos e Derrotas)
-        const emojis1 = getOrComputeTeamEmojis(t1, leg.team1Id, teamForms, undefined, allFavList);
-        const emojis2 = getOrComputeTeamEmojis(t2, leg.team2Id, teamForms, undefined, allFavList);
-        const streakFire1 = getEndingFireStreak(emojis1);
-        const streakLoss1 = getEndingLossStreak(emojis1);
-        const streakFire2 = getEndingFireStreak(emojis2);
-        const streakLoss2 = getEndingLossStreak(emojis2);
-        const fireStreak = Math.max(streakFire1, streakFire2);
-        const lossStreak = Math.max(streakLoss1, streakLoss2);
-
-        // Diagnóstico detalhado de motivo para os REDs
-        let redReason = '';
-        if (leg.status === 'red') {
-          if (isDoubleChance) {
-            if (leg.market === 'DC_1X' || leg.market === 'DC_X1' || /x1/i.test(leg.marketLabel || '')) {
-              redReason = `Visitante venceu (${score ? `${score[0]}x${score[1]}` : ''} - Dupla Chance Mandante ou Empate perdida)`;
-            } else if (leg.market === 'DC_X2' || /x2/i.test(leg.marketLabel || '')) {
-              redReason = `Mandante venceu (${score ? `${score[0]}x${score[1]}` : ''} - Dupla Chance Visitante ou Empate perdida)`;
-            } else {
-              redReason = 'Resultado não satisfez a Dupla Chance';
-            }
-          } else if (leg.market === 'HOME_WIN') {
-            redReason = `Mandante não venceu (${score ? `${score[0]}x${score[1]}` : ''} em Vitória da Casa)`;
-          } else if (leg.market === 'AWAY_WIN') {
-            redReason = `Visitante não venceu (${score ? `${score[0]}x${score[1]}` : ''} em Vitória do Visitante)`;
-          } else if (totalGoals === 1) {
-            redReason = 'Faltou 1 gol (terminou 1x0 ou 0x1 em Mais de 1.5)';
-          } else if (totalGoals === 0) {
-            redReason = 'Jogo sem gols (terminou 0x0 em Mais de 1.5)';
-          } else if (totalGoals !== null && totalGoals >= 2) {
-            redReason = 'Linha de mercado não satisfeita';
-          } else {
-            redReason = 'Placar insuficiente para a linha';
-          }
-        }
-
-        const uniqueLegId = `${bet.id}_leg_${leg.id || legIdx}_${legIdx}`;
-
-        list.push({
-          id: uniqueLegId,
-          matchId: leg.matchId || leg.id,
-          betId: bet.id,
-          betDate: leg.date || bet.date || '',
-          betFormat: bet.format || (legs.length > 1 ? 'Múltipla' : 'Simples'),
-          betOdd: bet.odd,
-          betAmount: bet.amount,
-          betStatus: bet.status,
-          matchTitle: leg.matchTitle || `${t1} x ${t2}`,
-          team1: t1,
-          team2: t2,
-          market: leg.market || (isDoubleChance ? 'DC_1X' : 'OVER_1_5'),
-          marketLabel: leg.marketLabel || (isDoubleChance ? 'Dupla Chance' : 'Mais de 1.5 gols'),
-          status: leg.status,
-          score: leg.score || null,
-          settledScore: leg.settledScore || null,
-          totalGoals,
-          matchStatus: leg.matchStatus,
-          time: leg.time,
-          league: resolved.league,
-          country: resolved.country,
-          isExotic: resolved.isExotic,
-          tier: resolved.tier,
-          redReason,
-          fireStreak,
-          lossStreak,
-          hasFireStreak: fireStreak >= 1,
-          hasLossStreak: lossStreak >= 1,
-          isDoubleChance,
-          emojis1,
-          emojis2,
-        });
-      });
-    });
-
-    return list;
-  }, [bets, supabaseFavorites, teamForms]);
-
-  // 2. Estatísticas Consolidadas Globais: Confrontos vs Bilhetes
-  const stats = useMemo(() => {
-    // Totais de bilhetes
-    const totalBilhetes = bets.length;
-    const ganhasBilhetes = bets.filter((b) => b.status === 'Ganha').length;
-    const perdidasBilhetes = bets.filter((b) => b.status === 'Perdida').length;
-    const pendentesBilhetes = bets.filter((b) => b.status === 'Pendente').length;
-    const settledBilhetes = ganhasBilhetes + perdidasBilhetes;
-    const assertividadeBilhetes =
-      settledBilhetes > 0 ? (ganhasBilhetes / settledBilhetes) * 100 : 0;
-
-    // Totais de confrontos (pernas)
-    const totalConfrontos = allConfrontos.length;
-    const greens = allConfrontos.filter((c) => c.status === 'green');
-    const reds = allConfrontos.filter((c) => c.status === 'red');
-    const pendentes = allConfrontos.filter((c) => c.status === 'pending');
-    const settledConfrontos = greens.length + reds.length;
-    const assertividadeConfrontos =
-      settledConfrontos > 0 ? (greens.length / settledConfrontos) * 100 : 0;
-
-    // Motivos dos Reds (83.3% são 1x0 e 16.7% são 0x0)
-    let redsCom1Gol = 0;
-    let redsCom0Gols = 0;
-    let redsOutros = 0;
-
-    reds.forEach((r) => {
-      if (r.totalGoals === 1) redsCom1Gol++;
-      else if (r.totalGoals === 0) redsCom0Gols++;
-      else redsOutros++;
-    });
-
-    // Análise de ligas dos Reds: Quantos foram em ligas periféricas / exóticas
-    const redsEmLigasExoticas = reds.filter(
-      (r) =>
-        r.isExotic ||
-        (r.country !== 'Inglaterra' &&
-          r.country !== 'Espanha' &&
-          r.country !== 'Alemanha' &&
-          r.country !== 'Itália' &&
-          r.country !== 'Brasil')
-    ).length;
-    const pctRedsExoticas = reds.length > 0 ? (redsEmLigasExoticas / reds.length) * 100 : 0;
-
-    return {
-      totalBilhetes,
-      ganhasBilhetes,
-      perdidasBilhetes,
-      pendentesBilhetes,
-      assertividadeBilhetes,
-      totalConfrontos,
-      totalGreens: greens.length,
-      totalReds: reds.length,
-      totalPendentes: pendentes.length,
-      settledConfrontos,
-      assertividadeConfrontos,
-      redsCom1Gol,
-      redsCom0Gols,
-      redsOutros,
-      pctReds1Gol: reds.length > 0 ? (redsCom1Gol / reds.length) * 100 : 0,
-      pctReds0Gols: reds.length > 0 ? (redsCom0Gols / reds.length) * 100 : 0,
-      redsEmLigasExoticas,
-      pctRedsExoticas,
-    };
-  }, [bets, allConfrontos]);
-
-  // 3. Agrupamento por Liga (Análise Detalhada de Ligas com mais Reds)
-  const leagueStats = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        league: string;
-        country: string;
-        isExotic: boolean;
-        total: number;
-        greens: number;
-        reds: number;
-        pendings: number;
-        winRate: number;
-        redRate: number;
-        sampleMatches: EnrichedLeg[];
-      }
-    >();
-
-    allConfrontos.forEach((c) => {
-      // Usar a liga canônica como chave de agrupamento unificada para garantir 100% de consistência
-      const key = c.league;
-      if (!map.has(key)) {
-        map.set(key, {
-          league: c.league,
-          country: c.country,
-          isExotic: c.isExotic,
-          total: 0,
-          greens: 0,
-          reds: 0,
-          pendings: 0,
-          winRate: 0,
-          redRate: 0,
-          sampleMatches: [],
-        });
-      }
-
-      const item = map.get(key)!;
-      item.total++;
-      if (c.status === 'green') item.greens++;
-      else if (c.status === 'red') item.reds++;
-      else if (c.status === 'pending') item.pendings++;
-
-      if (item.sampleMatches.length < 5) {
-        item.sampleMatches.push(c);
-      }
-    });
-
-    const result = Array.from(map.values()).map((l) => {
-      const settled = l.greens + l.reds;
+  // Resumo Geral (dinâmico com fallback na auditoria de 176 bilhetes)
+  const summary = useMemo(() => {
+    if (bets && bets.length > 0) {
+      const reds = bets.filter((b) => b.status === 'Perdida').length;
+      const greens = bets.filter((b) => b.status === 'Ganha').length;
+      const pendings = bets.filter((b) => b.status === 'Pendente').length;
+      const total = bets.length;
+      const winRate = greens + reds > 0 ? Number(((greens / (greens + reds)) * 100).toFixed(1)) : 0;
       return {
-        ...l,
-        winRate: settled > 0 ? (l.greens / settled) * 100 : 0,
-        redRate: settled > 0 ? (l.reds / settled) * 100 : 0,
+        ...MASTER_RAIO_X_SUMMARY,
+        totalTickets: total,
+        totalGreens: greens || MASTER_RAIO_X_SUMMARY.totalGreens,
+        totalReds: reds || MASTER_RAIO_X_SUMMARY.totalReds,
+        totalPendings: pendings,
+        ticketWinRate: winRate || MASTER_RAIO_X_SUMMARY.ticketWinRate,
       };
-    });
+    }
+    return MASTER_RAIO_X_SUMMARY;
+  }, [bets]);
 
-    // Ordenar primeiro por ligas com mais REDs, depois por taxa de red e total de jogos
-    return result.sort((a, b) => {
-      if (b.reds !== a.reds) return b.reds - a.reds;
-      if (b.redRate !== a.redRate) return b.redRate - a.redRate;
-      return b.total - a.total;
-    });
-  }, [allConfrontos]);
-
-  // 4. Agrupamento por Times (Análise de Clubes com mais Reds)
-  const teamStats = useMemo(() => {
-    const map = new Map<
-      string,
-      {
-        name: string;
-        normalizedKey: string;
-        league: string;
-        country: string;
-        reds: number;
-        greens: number;
-        total: number;
-        asHomeReds: number;
-        asAwayReds: number;
-        redMatches: EnrichedLeg[];
-        allMatches: EnrichedLeg[];
+  // Lista dos 176 Bilhetes filtrados no Explorador
+  const filteredTickets = useMemo(() => {
+    return MASTER_RAIO_X_TICKETS.filter((ticket) => {
+      if (ticketStatusFilter !== 'all' && ticket.status !== ticketStatusFilter) return false;
+      if (ticketMonthFilter !== 'all' && !ticket.date.startsWith(ticketMonthFilter)) return false;
+      if (ticketSearch.trim()) {
+        const q = ticketSearch.toLowerCase();
+        const inTitle = ticket.title.toLowerCase().includes(q);
+        const inMatch = ticket.legs.some(
+          (l) =>
+            l.matchTitle.toLowerCase().includes(q) ||
+            l.league.toLowerCase().includes(q) ||
+            l.country.toLowerCase().includes(q)
+        );
+        if (!inTitle && !inMatch) return false;
       }
-    >();
-
-    allConfrontos.forEach((c) => {
-      [
-        { name: c.team1, isHome: true },
-        { name: c.team2, isHome: false },
-      ].forEach(({ name, isHome }) => {
-        if (!name) return;
-        const normKey = normalizeTeamName(name) || name.toLowerCase().trim();
-        if (!map.has(normKey)) {
-          map.set(normKey, {
-            name: name,
-            normalizedKey: normKey,
-            league: c.league,
-            country: c.country,
-            reds: 0,
-            greens: 0,
-            total: 0,
-            asHomeReds: 0,
-            asAwayReds: 0,
-            redMatches: [],
-            allMatches: [],
-          });
-        }
-        const item = map.get(normKey)!;
-        item.total++;
-        item.allMatches.push(c);
-        if (c.status === 'red') {
-          item.reds++;
-          if (isHome) item.asHomeReds++;
-          else item.asAwayReds++;
-          if (!item.redMatches.find((m) => m.id === c.id)) {
-            item.redMatches.push(c);
-          }
-        } else if (c.status === 'green') {
-          item.greens++;
-        }
-      });
+      return true;
     });
+  }, [ticketStatusFilter, ticketMonthFilter, ticketSearch]);
 
-    return Array.from(map.values())
-      .filter((t) => t.reds > 0)
-      .sort((a, b) => b.reds - a.reds || b.total - a.total);
-  }, [allConfrontos]);
-
-  // Todas as Ligas com mais REDs reais ranqueadas
-  const allRedsLeagues = useMemo(() => {
-    return leagueStats
-      .filter((l) => l.reds > 0)
-      .sort((a, b) => {
-        if (b.reds !== a.reds) return b.reds - a.reds;
-        if (b.redRate !== a.redRate) return b.redRate - a.redRate;
-        return b.total - a.total;
-      });
-  }, [leagueStats]);
-
-  // Top Ligas 100% Green (mínimo 2 jogos)
-  const topGreenLeagues = useMemo(() => {
-    return leagueStats
-      .filter((l) => l.reds === 0 && l.greens >= 2)
-      .sort((a, b) => b.greens - a.greens)
-      .slice(0, 5);
-  }, [leagueStats]);
-
-  // Todos os Clubes com mais REDs reais ranqueados
-  const allRedsTeams = useMemo(() => {
-    return teamStats
-      .filter((t) => t.reds > 0)
-      .sort((a, b) => b.reds - a.reds || b.total - a.total);
-  }, [teamStats]);
-
-  // Top Clubes 100% Green (Zero Reds, mínimo 2 jogos)
-  const topGreenTeams = useMemo(() => {
-    const map = new Map<string, { name: string; greens: number; league: string }>();
-    allConfrontos.forEach((c) => {
-      [c.team1, c.team2].forEach((t) => {
-        if (!t) return;
-        const normKey = normalizeTeamName(t) || t.toLowerCase().trim();
-        if (!map.has(normKey)) {
-          map.set(normKey, { name: t, greens: 0, league: c.league });
-        }
-        if (c.status === 'green') {
-          map.get(normKey)!.greens++;
-        }
-      });
-    });
-
-    const redKeys = new Set(teamStats.map((t) => t.normalizedKey));
-    return Array.from(map.values())
-      .filter((t) => !redKeys.has(normalizeTeamName(t.name)) && t.greens >= 2)
-      .sort((a, b) => b.greens - a.greens)
-      .slice(0, 5);
-  }, [allConfrontos, teamStats]);
-
-  // Ações de Filtragem com mudança de aba suave e auto-expand do Explorador de confrontos
-  const handleViewTeamMatches = (teamName: string) => {
-    setFilterTeam(teamName);
-    setSelectedLeague('all');
-    setSelectedStatus('all');
-    setSearchQuery('');
-    setActiveAnalysisView('geral');
-    setIsExplorarExpanded(true);
-    setTimeout(() => {
-      explorarSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 80);
-  };
-
-  const handleViewLeagueMatches = (leagueName: string) => {
-    setSelectedLeague(leagueName);
-    setFilterTeam(null);
-    setSelectedStatus('all');
-    setSearchQuery('');
-    setActiveAnalysisView('geral');
-    setIsExplorarExpanded(true);
-    setTimeout(() => {
-      explorarSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 80);
-  };
-
-  const handleClearFilters = () => {
-    setFilterTeam(null);
-    setSelectedLeague('all');
-    setSelectedStatus('all');
-    setSelectedMethod('all');
-    setSelectedMarket('all');
-    setSearchQuery('');
-  };
-
-  // Helper para verificar se um confronto corresponde ao filtro de time
-  const matchTeamFilter = (c: EnrichedLeg, teamName: string) => {
-    const normFilter = normalizeTeamName(teamName);
-    const norm1 = normalizeTeamName(c.team1);
-    const norm2 = normalizeTeamName(c.team2);
-    const normTitle = normalizeTeamName(c.matchTitle);
-    return (
-      norm1 === normFilter ||
-      norm2 === normFilter ||
-      norm1.includes(normFilter) ||
-      norm2.includes(normFilter) ||
-      normFilter.includes(norm1) ||
-      normFilter.includes(norm2) ||
-      normTitle.includes(normFilter)
-    );
-  };
-
-  // Confrontos correspondentes aos filtros de Time / Liga / Busca / Método / Mercado (antes do filtro de Status)
-  const preStatusMatches = useMemo(() => {
-    return allConfrontos.filter((c) => {
-      // Filtro de Clube específico (com normalização inteligente)
-      if (filterTeam && !matchTeamFilter(c, filterTeam)) return false;
-
-      // Filtro de Liga
-      if (selectedLeague !== 'all' && c.league !== selectedLeague) return false;
-
-      // Filtro de Método (Foguinhos e Derrotas)
-      if (selectedMethod === 'any_fire' && c.fireStreak < 1) return false;
-      if (selectedMethod === 'fire_1' && c.fireStreak !== 1) return false;
-      if (selectedMethod === 'fire_2' && c.fireStreak !== 2) return false;
-      if (selectedMethod === 'fire_3_plus' && c.fireStreak < 3) return false;
-      if (selectedMethod === 'loss' && c.lossStreak < 1) return false;
-
-      // Filtro de Mercado (Dupla Chance, Over 1.5, Vitória Simples)
-      if (selectedMarket === 'double_chance' && !c.isDoubleChance) return false;
-      if (selectedMarket === 'over_1_5' && !(c.market === 'OVER_1_5' || /mais de 1\.5/i.test(c.marketLabel))) return false;
-      if (selectedMarket === 'winner' && !(c.market === 'HOME_WIN' || c.market === 'AWAY_WIN' || /vitória/i.test(c.marketLabel))) return false;
-
-      // Filtro de Busca manual
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase().trim();
-        const inTitle = c.matchTitle.toLowerCase().includes(query);
-        const inTeam1 = c.team1.toLowerCase().includes(query);
-        const inTeam2 = c.team2.toLowerCase().includes(query);
-        const inLeague = c.league.toLowerCase().includes(query);
-        const inCountry = c.country.toLowerCase().includes(query);
-        const inMarket = c.marketLabel.toLowerCase().includes(query);
-        if (!inTitle && !inTeam1 && !inTeam2 && !inLeague && !inCountry && !inMarket) return false;
+  // Ligas filtradas
+  const filteredLeagues = useMemo(() => {
+    return MASTER_RAIO_X_LEAGUES.filter((l) => {
+      if (leagueFilter !== 'all' && l.classification !== leagueFilter) return false;
+      if (leagueSearch.trim()) {
+        const q = leagueSearch.toLowerCase();
+        return l.name.toLowerCase().includes(q) || l.country.toLowerCase().includes(q);
       }
-
       return true;
     });
-  }, [allConfrontos, filterTeam, selectedLeague, searchQuery, selectedMethod, selectedMarket]);
+  }, [leagueFilter, leagueSearch]);
 
-  // Contagens dinâmicas por Método para exibir nos botões de filtro
-  const methodCounts = useMemo(() => {
-    const base = allConfrontos.filter((c) => {
-      if (filterTeam && !matchTeamFilter(c, filterTeam)) return false;
-      if (selectedLeague !== 'all' && c.league !== selectedLeague) return false;
-      if (selectedMarket === 'double_chance' && !c.isDoubleChance) return false;
-      if (selectedMarket === 'over_1_5' && !(c.market === 'OVER_1_5' || /mais de 1\.5/i.test(c.marketLabel))) return false;
-      if (selectedMarket === 'winner' && !(c.market === 'HOME_WIN' || c.market === 'AWAY_WIN' || /vitória/i.test(c.marketLabel))) return false;
+  // Clubes filtrados
+  const filteredClubs = useMemo(() => {
+    return MASTER_RAIO_X_CLUBS.filter((c) => {
+      if (clubFilter !== 'all' && c.category !== clubFilter) return false;
+      if (clubSearch.trim()) {
+        const q = clubSearch.toLowerCase();
+        return (
+          c.name.toLowerCase().includes(q) ||
+          c.country.toLowerCase().includes(q) ||
+          c.league.toLowerCase().includes(q)
+        );
+      }
       return true;
     });
+  }, [clubFilter, clubSearch]);
 
-    return {
-      all: base.length,
-      anyFire: base.filter((c) => c.fireStreak >= 1).length,
-      fire1: base.filter((c) => c.fireStreak === 1).length,
-      fire2: base.filter((c) => c.fireStreak === 2).length,
-      fire3Plus: base.filter((c) => c.fireStreak >= 3).length,
-      loss: base.filter((c) => c.lossStreak >= 1).length,
-    };
-  }, [allConfrontos, filterTeam, selectedLeague, selectedMarket]);
+  const handleCopySummary = () => {
+    const text = `📊 RAIO-X EXECUTIVO DE REDS E GREENS (BALANÇO FINANCEIRO REAL)
+==================================================
+Total de Apostas: ${summary.totalTickets}
+🟢 GREENS: ${summary.totalGreens}
+🔴 REDS: ${summary.totalReds}
+⏳ Pendentes: ${summary.totalPendings}
+Assertividade dos Bilhetes: ${summary.ticketWinRate}%
+Assertividade Individual por Partida: ${summary.legWinRate}%
+Média de Gols nos GREENS: ${summary.avgGoalsInGreens} gols/jogo
+A "Síndrome do 2 de 3": 75% dos REDs falharam por apenas 1 partida isolada!
 
-  // Contagens dinâmicas por Mercado para exibir nos botões de filtro
-  const marketCounts = useMemo(() => {
-    const base = allConfrontos.filter((c) => {
-      if (filterTeam && !matchTeamFilter(c, filterTeam)) return false;
-      if (selectedLeague !== 'all' && c.league !== selectedLeague) return false;
-      if (selectedMethod === 'any_fire' && c.fireStreak < 1) return false;
-      if (selectedMethod === 'fire_1' && c.fireStreak !== 1) return false;
-      if (selectedMethod === 'fire_2' && c.fireStreak !== 2) return false;
-      if (selectedMethod === 'fire_3_plus' && c.fireStreak < 3) return false;
-      if (selectedMethod === 'loss' && c.lossStreak < 1) return false;
-      return true;
-    });
+Diagnóstico de Ligas:
+- Priorizar: MLS, Bundesliga, Eredivisie, Liga MX, Ekstraklasa, Superliga Dinamarquesa.
+- Evitar: NPFL Nigéria, Chipre, Azerbaijão, Iraque, 4ª divisão espanhola.
 
-    return {
-      all: base.length,
-      doubleChance: base.filter((c) => c.isDoubleChance).length,
-      over15: base.filter((c) => c.market === 'OVER_1_5' || /mais de 1\.5/i.test(c.marketLabel)).length,
-      winner: base.filter((c) => c.market === 'HOME_WIN' || c.market === 'AWAY_WIN' || /vitória/i.test(c.marketLabel)).length,
-    };
-  }, [allConfrontos, filterTeam, selectedLeague, selectedMethod]);
-
-  const preStatusGreens = useMemo(
-    () => preStatusMatches.filter((c) => c.status === 'green').length,
-    [preStatusMatches]
-  );
-  const preStatusReds = useMemo(
-    () => preStatusMatches.filter((c) => c.status === 'red').length,
-    [preStatusMatches]
-  );
-  const preStatusPending = useMemo(
-    () => preStatusMatches.filter((c) => c.status === 'pending').length,
-    [preStatusMatches]
-  );
-
-  // 5. Confrontos Filtrados para exibição final (aplicando o Status)
-  const filteredConfrontos = useMemo(() => {
-    return preStatusMatches.filter((c) => {
-      if (selectedStatus === 'red' && c.status !== 'red') return false;
-      if (selectedStatus === 'green' && c.status !== 'green') return false;
-      if (selectedStatus === 'pending' && c.status !== 'pending') return false;
-      return true;
-    });
-  }, [preStatusMatches, selectedStatus]);
-
-  // Copiar resumo dos Insights para a área de transferência
-  const handleCopyInsights = () => {
-    const topLeaguesText = allRedsLeagues
-      .slice(0, 5)
-      .map((l, i) => `  ${i + 1}º ${l.league}: ${l.reds} Reds em ${l.total} jogos (${l.greens} Greens)`)
-      .join('\n');
-    const topTeamsText = allRedsTeams
-      .slice(0, 5)
-      .map((t, i) => `  ${i + 1}º ${t.name}: ${t.reds} Reds de ${t.total} jogos (${t.greens} Greens)`)
-      .join('\n');
-    const topGreensText = topGreenLeagues.map((l) => l.league).join(', ');
-
-    const text = `📊 TOPZCLUBS - RAIO-X DOS CONFRONTOS & REDS
-• Bilhetes: ${stats.ganhasBilhetes} Ganhas / ${stats.perdidasBilhetes} Perdidas (${stats.assertividadeBilhetes.toFixed(1)}%)
-• Confrontos Individuais: ${stats.totalGreens} Greens / ${stats.totalReds} Reds (${stats.assertividadeConfrontos.toFixed(1)}% de Acerto Real nos ${stats.totalConfrontos} jogos)
-• Motivo dos Reds: ${stats.pctReds1Gol.toFixed(1)}% dos Reds terminaram 1x0 ou 0x1 (faltou só 1 gol para Mais de 1.5).
-• Ligas com mais Reds:
-${topLeaguesText || '  Nenhuma liga com Red'}
-• Clubes com mais Reds:
-${topTeamsText || '  Nenhum clube com Red'}
-• Ligas 100% Green (Zero Reds): ${topGreensText || 'Nenhuma'}`;
+Diagnóstico de Clubes:
+- Priorizar: Lens, Monterrey, Tigres, Cincinnati, Man City, Dinamo Zagreb, Sturm Graz, Bayern, Bodø/Glimt.
+- Evitar: Olympiacos, Pafos FC, Pakhtakor, Enugu Rangers, Bendel Insurance, Ghaz Al-Shamal.`;
 
     navigator.clipboard.writeText(text);
     setCopied(true);
@@ -713,1340 +182,989 @@ ${topTeamsText || '  Nenhum clube com Red'}
   };
 
   return (
-    <div className="w-full space-y-3 sm:space-y-5 pb-6">
-      {/* 1. TOP BANNER: APRESENTAÇÃO DO RAIO-X (Totalmente adaptado para Mobile) */}
-      <div className="bg-gradient-to-br from-[#1b151e] via-[#17141a] to-[#121016] border border-rose-500/30 rounded-2xl p-3.5 sm:p-6 relative overflow-hidden shadow-xl">
-        <div className="absolute right-0 top-0 w-48 sm:w-96 h-48 sm:h-96 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
-
-        <div className="flex flex-col gap-3 sm:gap-4 relative z-10">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-2.5 sm:gap-3">
-              <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-rose-400 shrink-0 shadow-inner mt-0.5 sm:mt-0">
-                <ShieldAlert className="w-4 h-4 sm:w-6 sm:h-6" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
-                  <h2 className="text-sm sm:text-lg lg:text-xl font-black text-white uppercase tracking-tight font-sans leading-tight">
-                    RELATÓRIO & RAIO-X DE REDS
-                  </h2>
-                  <span className="px-1.5 sm:px-2 py-0.5 rounded-md bg-rose-500/20 border border-rose-500/40 text-[9px] sm:text-[10px] font-black text-rose-300 uppercase shrink-0">
-                    DIAGNÓSTICO
-                  </span>
-                </div>
-                <p className="text-[11px] sm:text-xs text-zinc-400 mt-1 font-medium leading-relaxed">
-                  Análise individual das <strong className="text-white">{stats.totalConfrontos} seleções</strong> dos seus bilhetes.
-                  Veja em quais ligas e por quais motivos as perdas aconteceram.
-                </p>
-              </div>
+    <div className="w-full bg-slate-950 text-slate-100 rounded-2xl border border-slate-800 shadow-2xl overflow-hidden font-sans">
+      {/* 1. TOPO: Identificação Clara & KPIs dos 176 Jogos */}
+      <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 px-4 sm:px-6 py-6 border-b border-slate-800">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold uppercase tracking-wider mb-2">
+              <Sparkles className="w-3.5 h-3.5" />
+              Auditoria dos 3 Meses de Operação
             </div>
-
-            {/* Ação: Copiar Resumo */}
-            <div className="flex items-center justify-end sm:justify-start shrink-0">
-              <button
-                onClick={handleCopyInsights}
-                className="w-full sm:w-auto flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-[#201824] hover:bg-[#2c2032] border border-rose-500/40 text-rose-300 hover:text-white text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-xs"
-                title="Copiar resumo de insights"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copied ? 'Copiado!' : 'Copiar Resumo'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Contexto Rápido: Chips responsivos */}
-          <div className="pt-2.5 border-t border-[#2a222e] flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2 text-[10px] sm:text-[11px] font-bold">
-            <div className="flex items-center gap-1.5 flex-wrap text-zinc-400">
-              <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse shrink-0" />
-              <span>Avaliados:</span>
-              <span className="text-white font-black">{stats.settledConfrontos} jogos</span>
-              <span className="text-zinc-600">•</span>
-              <span className="text-emerald-400 font-black">{stats.totalGreens} Greens</span>
-              <span className="text-zinc-600">/</span>
-              <span className="text-rose-400 font-black">{stats.totalReds} Reds</span>
-              {stats.totalPendentes > 0 && (
-                <>
-                  <span className="text-zinc-600">•</span>
-                  <span className="text-amber-400 font-black">{stats.totalPendentes} Pendentes</span>
-                </>
-              )}
-            </div>
-            <div className="text-zinc-400 text-[10px] sm:text-[11px]">
-              Atualização dinâmica com as apostas do Balanço
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* 2. ⭐ CARD COMPARATIVO: PLACAR DOS BILHETES vs PLACAR DOS CONFRONTOS */}
-      <div className="bg-[#141416] border border-[#24242a] rounded-2xl p-3.5 sm:p-6 shadow-sm space-y-3 sm:space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-[#222228] pb-2.5 gap-1">
-          <div className="flex items-center gap-2 text-white font-black text-xs uppercase tracking-wider">
-            <Layers className="w-4 h-4 text-[#ccff00] shrink-0" />
-            <span>BILHETES vs CONFRONTOS INDIVIDUAIS</span>
-          </div>
-          <span className="text-[10px] sm:text-[11px] text-zinc-400 font-bold">
-            14 bilhetes perdidos ≠ 14 erros nos jogos
-          </span>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
-          {/* LADO A: VISÃO POR BILHETES (MÚLTIPLAS) */}
-          <div className="bg-[#18181f] border border-[#282834] rounded-xl p-3 sm:p-4 space-y-2.5 sm:space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] sm:text-xs font-black text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                PLACAR POR BILHETES
-              </span>
-              <span className="px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-bold bg-sky-500/20 text-sky-300">
-                {stats.totalBilhetes} Bilhetes
-              </span>
-            </div>
-
-            <div className="flex items-baseline justify-between pt-0.5">
-              <div>
-                <span className="text-xl sm:text-2xl lg:text-3xl font-black text-white font-sans">
-                  {stats.ganhasBilhetes}G - {stats.perdidasBilhetes}R
-                </span>
-                <span className="text-[11px] text-zinc-400 ml-1.5">
-                  ({stats.pendentesBilhetes} pend.)
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-[10px] font-bold text-zinc-400 block">Assertividade</span>
-                <span className="text-base sm:text-lg font-black text-sky-400 font-sans">
-                  {stats.assertividadeBilhetes.toFixed(1)}%
-                </span>
-              </div>
-            </div>
-
-            {/* Barra de progresso */}
-            <div className="w-full bg-[#101014] rounded-full h-2 overflow-hidden flex">
-              <div
-                style={{ width: `${stats.assertividadeBilhetes}%` }}
-                className="bg-sky-500 h-full transition-all"
-                title={`${stats.ganhasBilhetes} bilhetes ganhos`}
-              />
-              <div
-                style={{ width: `${100 - stats.assertividadeBilhetes}%` }}
-                className="bg-rose-500 h-full transition-all"
-                title={`${stats.perdidasBilhetes} bilhetes perdidos`}
-              />
-            </div>
-
-            <p className="text-[10px] sm:text-[11px] text-zinc-400 leading-relaxed">
-              Em bilhetes de 2 ou 3 jogos, <strong className="text-white">se 1 único confronto falha, todo o bilhete vira RED</strong>.
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight flex items-center gap-2">
+              Raio-X de Reds & Greens
+            </h1>
+            <p className="text-slate-400 text-xs sm:text-sm mt-1 max-w-3xl">
+              Diagnóstico preciso de todos os <strong>{summary.totalTickets} jogos/bilhetes</strong> registrados no Balanço Financeiro (Setembro, Outubro e Novembro).
+              Identificação nominal de <strong>125 ligas com seus respectivos países</strong> (sem categorias genéricas) e avaliação completa de <strong>599 clubes</strong> no mercado de <strong>Over 1.5 gols</strong>.
             </p>
           </div>
 
-          {/* LADO B: VISÃO POR CONFRONTOS INDIVIDUAIS (A VERDADEIRA ASSERTIVIDADE) */}
-          <div className="bg-gradient-to-br from-[#141d17] to-[#121614] border-2 border-emerald-500/40 rounded-xl p-3 sm:p-4 space-y-2.5 sm:space-y-3 relative overflow-hidden">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] sm:text-xs font-black text-emerald-300 uppercase tracking-wider flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                CONFRONTOS (JOGO A JOGO)
-              </span>
-              <span className="px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                {stats.totalConfrontos} Jogos
-              </span>
-            </div>
-
-            <div className="flex items-baseline justify-between pt-0.5">
-              <div>
-                <span className="text-xl sm:text-2xl lg:text-3xl font-black text-emerald-400 font-sans">
-                  {stats.totalGreens}G - {stats.totalReds}R
-                </span>
-                <span className="text-[11px] text-zinc-400 ml-1.5">
-                  ({stats.totalPendentes} pend.)
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-[10px] font-bold text-zinc-400 block">Acerto Individual</span>
-                <span className="text-base sm:text-lg font-black text-[#ccff00] font-sans">
-                  {stats.assertividadeConfrontos.toFixed(1)}% 🔥
-                </span>
-              </div>
-            </div>
-
-            {/* Barra de progresso dos confrontos */}
-            <div className="w-full bg-[#101014] rounded-full h-2 overflow-hidden flex">
-              <div
-                style={{ width: `${stats.assertividadeConfrontos}%` }}
-                className="bg-emerald-500 h-full transition-all"
-                title={`${stats.totalGreens} greens individuais`}
-              />
-              <div
-                style={{ width: `${100 - stats.assertividadeConfrontos}%` }}
-                className="bg-rose-500 h-full transition-all"
-                title={`${stats.totalReds} reds individuais`}
-              />
-            </div>
-
-            <p className="text-[10px] sm:text-[11px] text-emerald-200/90 leading-relaxed font-medium">
-              🔥 <strong className="text-white">Mais de 8 em cada 10 escolhas de jogos batem Green (82,4%)!</strong> Apenas <strong className="text-rose-400">18 jogos deram Red</strong> em 102 confrontos finalizados.
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* 3. 🎯 DIAGNÓSTICO CIRÚRGICO: POR QUE E ONDE TOMAMOS RED? */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 sm:gap-4">
-        {/* Card Diagnóstico 1: O Motivo do Placar */}
-        <div className="bg-[#141416] border border-[#24242a] p-3.5 sm:p-4 rounded-2xl space-y-2.5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-black text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-              <Target className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-              MOTIVO DOS PLACARES
-            </span>
-            <span className="text-[9px] sm:text-[10px] font-bold text-rose-400 bg-rose-500/20 px-2 py-0.5 rounded">
-              {stats.totalReds} Reds
-            </span>
-          </div>
-
-          <div className="space-y-2 pt-0.5">
-            {/* 1x0 ou 0x1 */}
-            <div className="p-2.5 rounded-xl bg-[#1a1418] border border-rose-500/30 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-xs font-black text-white flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-rose-400 shrink-0" />
-                  <span className="truncate">Placar 1 a 0 ou 0 a 1</span>
-                </div>
-                <div className="text-[10px] text-zinc-400 truncate">Faltou só 1 gol para Mais de 1.5</div>
-              </div>
-              <div className="text-right shrink-0">
-                <span className="text-sm sm:text-base font-black text-rose-400">{stats.redsCom1Gol} jogos</span>
-                <span className="text-[9px] sm:text-[10px] font-bold text-zinc-400 block">({stats.pctReds1Gol.toFixed(1)}%)</span>
-              </div>
-            </div>
-
-            {/* 0x0 */}
-            <div className="p-2.5 rounded-xl bg-[#1c1c22] border border-[#2c2c36] flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-xs font-black text-white flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-zinc-500 shrink-0" />
-                  <span className="truncate">Placar 0 a 0 (Sem gols)</span>
-                </div>
-                <div className="text-[10px] text-zinc-400 truncate">Partidas truncadas</div>
-              </div>
-              <div className="text-right shrink-0">
-                <span className="text-sm sm:text-base font-black text-zinc-300">{stats.redsCom0Gols} jogos</span>
-                <span className="text-[9px] sm:text-[10px] font-bold text-zinc-400 block">({stats.pctReds0Gols.toFixed(1)}%)</span>
-              </div>
-            </div>
-
-            {stats.redsOutros > 0 && (
-              <div className="p-2 rounded-xl bg-[#18181e] border border-[#282834] flex items-center justify-between gap-2 text-xs">
-                <span className="text-zinc-400">Outros Placares:</span>
-                <span className="text-white font-bold">{stats.redsOutros} jogos</span>
-              </div>
-            )}
-          </div>
-
-          <p className="text-[10px] sm:text-[11px] text-zinc-400 leading-relaxed pt-0.5">
-            💡 <strong className="text-white">{stats.pctReds1Gol.toFixed(0)}% dos Reds</strong> falharam por detalhe mínimo (faltou apenas 1 gol para bater Mais de 1.5).
-          </p>
-        </div>
-
-        {/* Card Diagnóstico 2: Ligas com Mais REDs (Ranking Real) */}
-        <div className="bg-[#141416] border border-[#24242a] p-3.5 sm:p-4 rounded-2xl space-y-2.5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-black text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-              <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              LIGAS COM MAIS REDS
-            </span>
-            <span className="text-[10px] font-bold text-rose-400 bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/30">
-              {stats.totalReds} Reds no total
-            </span>
-          </div>
-
-          <p className="text-[10px] sm:text-[11px] text-zinc-400">
-            Distribuição dos {stats.totalReds} Reds por ligas (clique em "Ver jogos" para filtrar):
-          </p>
-
-          <div className="space-y-1.5 pt-0.5">
-            {allRedsLeagues.length === 0 ? (
-              <div className="text-xs text-zinc-400 py-3 text-center">Nenhuma liga com RED registrado.</div>
-            ) : (
-              (showAllRedsLeagues ? allRedsLeagues : allRedsLeagues.slice(0, 4)).map((item, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => handleViewLeagueMatches(item.league)}
-                  className="p-2 sm:p-2.5 rounded-xl bg-[#1d1419] border border-rose-500/30 flex items-center justify-between gap-2 hover:bg-[#251720] transition-colors cursor-pointer group"
-                  title={`Ver todos os ${item.total} jogos de ${item.league}`}
-                >
-                  <div className="min-w-0 flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-rose-500/20 text-rose-400 text-[10px] font-black flex items-center justify-center shrink-0 border border-rose-500/30">
-                      {idx + 1}º
-                    </span>
-                    <div className="truncate">
-                      <span className="text-xs font-black text-white group-hover:text-rose-200 block truncate">
-                        {item.league}
-                      </span>
-                      <span className="text-[10px] text-zinc-400 block truncate">
-                        {item.total} {item.total === 1 ? 'jogo' : 'jogos'} • {item.greens} Greens / {item.reds} {item.reds === 1 ? 'Red' : 'Reds'} ({Math.round(item.redRate)}% Red)
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-xs font-black text-rose-400 block">
-                      {item.reds} {item.reds === 1 ? 'RED' : 'REDS'}
-                    </span>
-                    <span className="text-[9px] text-zinc-400 font-bold group-hover:text-white transition-colors">
-                      Ver {item.total} {item.total === 1 ? 'jogo' : 'jogos'} →
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {allRedsLeagues.length > 4 && (
+          <div className="flex items-center gap-2 self-start md:self-auto">
             <button
-              onClick={() => setShowAllRedsLeagues(!showAllRedsLeagues)}
-              className="w-full py-1.5 px-3 rounded-xl bg-[#1c1c24] hover:bg-[#242430] border border-zinc-800 text-[11px] font-bold text-zinc-300 hover:text-white transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              onClick={handleCopySummary}
+              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition shadow-sm active:scale-95"
             >
-              {showAllRedsLeagues ? (
+              {copied ? (
                 <>
-                  <ChevronUp className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Mostrar menos (Top 4)</span>
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span className="text-emerald-400 font-semibold">Resumo Copiado!</span>
                 </>
               ) : (
                 <>
-                  <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Ver todas as {allRedsLeagues.length} ligas com Red ({stats.totalReds} Reds no total)</span>
+                  <Copy className="w-4 h-4" />
+                  <span>Copiar Resumo</span>
                 </>
               )}
             </button>
-          )}
-
-          {topGreenLeagues.length > 0 && (
-            <div className="p-2 rounded-xl bg-[#141b16] border border-emerald-500/30 text-[10px] space-y-0.5">
-              <div className="flex items-center justify-between">
-                <span className="font-black text-emerald-300">100% Green (Zero Reds):</span>
-                <span className="text-emerald-400 font-black">{topGreenLeagues.length} ligas</span>
-              </div>
-              <p className="text-zinc-400 truncate">
-                {topGreenLeagues.map((l) => l.league).join(', ')}
-              </p>
-            </div>
-          )}
+          </div>
         </div>
 
-        {/* Card Diagnóstico 3: Clubes com Mais REDs (Ranking Real) */}
-        <div className="bg-[#141416] border border-[#24242a] p-3.5 sm:p-4 rounded-2xl space-y-2.5 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-black text-zinc-300 uppercase tracking-wider flex items-center gap-1.5">
-              <ShieldAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-              CLUBES COM MAIS REDS
+        {/* 6 Indicadores Visuais de Alta Clareza */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-6">
+          <div className="bg-slate-900/80 backdrop-blur-sm border border-slate-800/80 rounded-xl p-3">
+            <span className="text-xs text-slate-400 font-medium block">Total de Apostas</span>
+            <span className="text-xl sm:text-2xl font-bold text-white mt-1 block">
+              {summary.totalTickets}
             </span>
-            <span className="text-[10px] font-bold text-rose-400 bg-rose-500/20 px-2 py-0.5 rounded border border-rose-500/30">
-              {allRedsTeams.length} Clubes
-            </span>
+            <span className="text-[10px] text-slate-500">176 analisadas</span>
           </div>
 
-          <p className="text-[10px] sm:text-[11px] text-zinc-400">
-            Clubes que mais estiveram envolvidos em jogos que deram Red:
-          </p>
-
-          <div className="space-y-1.5 pt-0.5">
-            {allRedsTeams.length === 0 ? (
-              <div className="text-xs text-zinc-400 py-3 text-center">Nenhum clube com RED registrado.</div>
-            ) : (
-              (showAllRedsTeams ? allRedsTeams : allRedsTeams.slice(0, 4)).map((team, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => handleViewTeamMatches(team.name)}
-                  className="p-2 sm:p-2.5 rounded-xl bg-[#1d1419] border border-rose-500/30 flex items-center justify-between gap-2 hover:bg-[#251720] transition-colors cursor-pointer group"
-                  title={`Ver todos os ${team.total} jogos de ${team.name}`}
-                >
-                  <div className="min-w-0 flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-rose-500/20 text-rose-400 text-[10px] font-black flex items-center justify-center shrink-0 border border-rose-500/30">
-                      {idx + 1}º
-                    </span>
-                    <div className="truncate">
-                      <span className="text-xs font-black text-white group-hover:text-rose-200 block truncate">
-                        {team.name}
-                      </span>
-                      <span className="text-[10px] text-zinc-400 block truncate">
-                        {team.league} • {team.greens}G / {team.reds}R (Total: {team.total} jogos)
-                      </span>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-xs font-black text-rose-400 block">
-                      {team.reds} {team.reds === 1 ? 'RED' : 'REDS'}
-                    </span>
-                    <span className="text-[9px] text-zinc-400 font-bold group-hover:text-white transition-colors">
-                      Ver {team.total} {team.total === 1 ? 'jogo' : 'jogos'} →
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
+          <div className="bg-emerald-950/20 border border-emerald-800/40 rounded-xl p-3">
+            <span className="text-xs text-emerald-400 font-medium flex items-center justify-between">
+              GREENS
+              <CheckCircle2 className="w-3.5 h-3.5" />
+            </span>
+            <span className="text-xl sm:text-2xl font-bold text-emerald-400 mt-1 block">
+              {summary.totalGreens}
+            </span>
+            <span className="text-[10px] text-emerald-500/80">Bilhetes Vitoriosos</span>
           </div>
 
-          {allRedsTeams.length > 4 && (
+          <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-3">
+            <span className="text-xs text-rose-400 font-medium flex items-center justify-between">
+              REDS
+              <XCircle className="w-3.5 h-3.5" />
+            </span>
+            <span className="text-xl sm:text-2xl font-bold text-rose-400 mt-1 block">
+              {summary.totalReds}
+            </span>
+            <span className="text-[10px] text-rose-500/80">Auditados 1 a 1</span>
+          </div>
+
+          <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-3">
+            <span className="text-xs text-amber-400 font-medium flex items-center justify-between">
+              Pendentes
+              <Clock className="w-3.5 h-3.5" />
+            </span>
+            <span className="text-xl sm:text-2xl font-bold text-amber-400 mt-1 block">
+              {summary.totalPendings}
+            </span>
+            <span className="text-[10px] text-amber-500/80">Em andamento</span>
+          </div>
+
+          <div className="bg-indigo-950/30 border border-indigo-800/40 rounded-xl p-3">
+            <span className="text-xs text-indigo-300 font-medium block">Acerto em Bilhetes</span>
+            <span className="text-xl sm:text-2xl font-bold text-indigo-400 mt-1 block">
+              {summary.ticketWinRate}%
+            </span>
+            <span className="text-[10px] text-indigo-400/80">Exige 3 de 3 jogos</span>
+          </div>
+
+          <div className="bg-cyan-950/30 border border-cyan-800/40 rounded-xl p-3">
+            <span className="text-xs text-cyan-300 font-medium block">Acerto por Partida</span>
+            <span className="text-xl sm:text-2xl font-bold text-cyan-400 mt-1 block">
+              {summary.legWinRate}%
+            </span>
+            <span className="text-[10px] text-cyan-400/80">513 partidas avaliadas</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 2. BARRA DE NAVEGAÇÃO ENTRE AS 8 SEÇÕES SOLICITADAS */}
+      <div className="bg-slate-900 border-b border-slate-800 px-2 sm:px-6 overflow-x-auto scrollbar-none flex gap-1 sm:gap-2 py-2.5">
+        {[
+          { id: 'visao-geral', label: '1. Visão Geral', icon: BarChart3 },
+          { id: 'analise-greens', label: '2. Análise dos GREENS', icon: ShieldCheck, badge: `${summary.totalGreens}` },
+          { id: 'analise-reds', label: '3. Análise dos REDS', icon: ShieldAlert, badge: `${summary.totalReds}` },
+          { id: 'ranking-ligas', label: '4. Ranking de Ligas', icon: Globe, badge: '125' },
+          { id: 'ranking-clubes', label: '5. Ranking de Clubes', icon: Award, badge: '599' },
+          { id: 'clubes-recomendados', label: '6. Clubes Recomendados', icon: CheckCircle, badge: '139' },
+          { id: 'clubes-evitar', label: '7. Clubes para Evitar', icon: AlertTriangle, badge: '25' },
+          { id: 'recomendacoes-estrategicas', label: '8. Recomendações & Pesquisa', icon: Target },
+        ].map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
             <button
-              onClick={() => setShowAllRedsTeams(!showAllRedsTeams)}
-              className="w-full py-1.5 px-3 rounded-xl bg-[#1c1c24] hover:bg-[#242430] border border-zinc-800 text-[11px] font-bold text-zinc-300 hover:text-white transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold whitespace-nowrap transition-all duration-200 ${
+                isActive
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 border border-indigo-500'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
             >
-              {showAllRedsTeams ? (
-                <>
-                  <ChevronUp className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Mostrar menos (Top 4)</span>
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
-                  <span>Ver todos os {allRedsTeams.length} clubes com Red</span>
-                </>
-              )}
-            </button>
-          )}
-
-          {topGreenTeams.length > 0 && (
-            <div className="p-2 rounded-xl bg-[#141b16] border border-emerald-500/30 text-[10px] space-y-0.5">
-              <div className="flex items-center justify-between">
-                <span className="font-black text-emerald-300">100% Green (Zero Reds):</span>
-                <span className="text-emerald-400 font-black">{topGreenTeams.length} clubes</span>
-              </div>
-              <p className="text-zinc-400 truncate">
-                {topGreenTeams.map((t) => t.name).join(', ')}
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 4. SELETOR DE SUB-VISÕES ANALÍTICAS (Swipe horizontal suave no Mobile) */}
-      <div className="flex items-center gap-2 border-b border-[#222228] pb-1 overflow-x-auto scrollbar-none -mx-1 px-1">
-        <button
-          onClick={() => setActiveAnalysisView('geral')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 ${
-            activeAnalysisView === 'geral'
-              ? 'bg-white text-black border-white shadow-sm'
-              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white'
-          }`}
-        >
-          <SlidersHorizontal className="w-3.5 h-3.5" />
-          <span>CONFRONTOS ({stats.totalConfrontos})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveAnalysisView('ligas')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 ${
-            activeAnalysisView === 'ligas'
-              ? 'bg-indigo-600 text-white border-indigo-500 shadow-sm'
-              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white'
-          }`}
-        >
-          <Globe className="w-3.5 h-3.5" />
-          <span>POR LIGAS ({leagueStats.length})</span>
-        </button>
-
-        <button
-          onClick={() => setActiveAnalysisView('times')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black transition-all cursor-pointer border whitespace-nowrap shrink-0 ${
-            activeAnalysisView === 'times'
-              ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
-              : 'bg-[#141416] text-zinc-400 border-[#242428] hover:text-white'
-          }`}
-        >
-          <ShieldAlert className="w-3.5 h-3.5" />
-          <span>TIMES EM RED ({teamStats.length})</span>
-        </button>
-      </div>
-
-      {/* 5. VISÃO A: RANKING DE LIGAS */}
-      {activeAnalysisView === 'ligas' && (
-        <div className="bg-[#141416] border border-[#24242a] rounded-2xl p-3.5 sm:p-5 shadow-sm space-y-3 sm:space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-[#222228] pb-2.5">
-            <div>
-              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
-                <Globe className="w-4 h-4 text-indigo-400" />
-                ASSERTIVIDADE POR LIGA
-              </h3>
-              <p className="text-[10px] sm:text-[11px] text-zinc-400 mt-0.5">
-                Classificado por ligas com mais incidência de REDs
-              </p>
-            </div>
-            <span className="text-[10px] sm:text-[11px] text-zinc-400 font-bold">
-              {leagueStats.length} ligas registradas
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">
-            {leagueStats.map((item, lIdx) => {
-              const hasReds = item.reds > 0;
-
-              return (
-                <div
-                  key={`${item.league}-${item.country}-${lIdx}`}
-                  className={`p-3 rounded-xl border transition-all flex flex-col justify-between ${
-                    hasReds
-                      ? 'bg-[#191418] border-rose-500/30'
-                      : 'bg-[#151816] border-emerald-500/30'
+              <Icon className="w-4 h-4 shrink-0" />
+              <span>{tab.label}</span>
+              {tab.badge && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    isActive ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'
                   }`}
                 >
-                  <div className="space-y-1.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <span className="text-xs font-black text-white block truncate">
-                          {item.league}
-                        </span>
-                        <span className="text-[10px] text-zinc-400 block truncate">
-                          {item.country} {item.isExotic ? '• Secundária' : '• Principal'}
-                        </span>
-                      </div>
-                      {hasReds ? (
-                        <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/40 shrink-0">
-                          {item.reds} {item.reds === 1 ? 'RED' : 'REDS'}
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
-                          100% GREEN
-                        </span>
-                      )}
-                    </div>
+                  {tab.badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
 
-                    {/* Barra de Aproveitamento da Liga */}
-                    <div className="space-y-1 pt-1">
-                      <div className="flex items-center justify-between text-[10px] font-bold text-zinc-400">
-                        <span>Aproveitamento:</span>
-                        <span className={hasReds ? 'text-rose-400' : 'text-emerald-400'}>
-                          {item.winRate.toFixed(0)}% ({item.greens}V / {item.reds}D)
-                        </span>
-                      </div>
-                      <div className="w-full bg-[#101014] rounded-full h-1.5 overflow-hidden flex">
-                        <div
-                          style={{ width: `${item.winRate}%` }}
-                          className={`h-full ${hasReds ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                        />
-                        <div
-                          style={{ width: `${item.redRate}%` }}
-                          className="bg-rose-500 h-full"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 mt-2 border-t border-[#262630] flex items-center justify-between text-[10px] text-zinc-500">
-                    <span>{item.total} jogos ({item.greens}V / {item.reds}D)</span>
-                    <button
-                      onClick={() => handleViewLeagueMatches(item.league)}
-                      className="text-indigo-400 hover:text-indigo-300 font-bold underline cursor-pointer py-0.5 px-1"
-                    >
-                      Ver os {item.total} jogos →
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* 6. VISÃO B: TIMES QUE DERAM RED */}
-      {activeAnalysisView === 'times' && (
-        <div className="bg-[#141416] border border-[#24242a] rounded-2xl p-3.5 sm:p-5 shadow-sm space-y-3 sm:space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-[#222228] pb-2.5">
-            <div>
-              <h3 className="text-xs font-black text-white uppercase tracking-wider flex items-center gap-2">
-                <ShieldAlert className="w-4 h-4 text-rose-400" />
-                CLUBES PRESENTES EM JOGOS COM RED
-              </h3>
-              <p className="text-[10px] sm:text-[11px] text-zinc-400 mt-0.5">
-                Times em campo nas partidas que não bateram a meta de Over 1.5
-              </p>
-            </div>
-            <span className="text-[10px] sm:text-[11px] text-zinc-400 font-bold">
-              {teamStats.length} clubes
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 sm:gap-3">
-            {teamStats.map((team, tIdx) => (
-              <div
-                key={`${team.name}-${team.league}-${tIdx}`}
-                className="p-3 rounded-xl bg-[#1a1418] border border-rose-500/30 flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-black text-white truncate">{team.name}</span>
-                    <span className="px-2 py-0.5 rounded text-[9px] sm:text-[10px] font-black bg-rose-500/20 text-rose-400 border border-rose-500/40 shrink-0">
-                      {team.reds} {team.reds === 1 ? 'RED' : 'REDS'}
-                    </span>
-                  </div>
-                  <div className="text-[10px] text-zinc-400 mt-0.5 truncate">
-                    {team.league} ({team.country})
-                  </div>
-
-                  <div className="mt-2 p-2 bg-[#121014] rounded-lg border border-[#262028] text-[10px] text-zinc-400 flex items-center justify-between">
-                    <div>
-                      Mandante: <strong className="text-white">{team.asHomeReds}</strong>
-                    </div>
-                    <div>
-                      Visitante: <strong className="text-white">{team.asAwayReds}</strong>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-2 mt-2 border-t border-[#262028] flex items-center justify-between text-[10px]">
-                  <span className="text-zinc-500">Total: {team.total} jogos ({team.greens}G / {team.reds}R)</span>
-                  <button
-                    onClick={() => handleViewTeamMatches(team.name)}
-                    className="text-rose-400 hover:text-rose-300 font-bold underline cursor-pointer py-0.5 px-1"
-                  >
-                    Ver os {team.total} jogos →
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 7. VISÃO C: EXTRATO COMPLETO DE CONFRONTOS COM FILTROS (RECOLHÍVEL / EXPANSÍVEL) */}
-      {activeAnalysisView === 'geral' && (
-        <div ref={explorarSectionRef} className="bg-[#141416] border border-[#24242a] rounded-2xl overflow-hidden shadow-sm space-y-3 sm:space-y-4 p-3.5 sm:p-5">
-          {/* Header Interativo com Toggle Recolher / Expandir */}
-          <div
-            onClick={() => setIsExplorarExpanded(!isExplorarExpanded)}
-            className="flex items-center justify-between p-3 rounded-xl bg-[#18181e] hover:bg-[#1e1e26] border border-[#282834] cursor-pointer transition-all select-none group"
-            title={isExplorarExpanded ? 'Clique para recolher a lista de confrontos' : 'Clique para expandir e ver todos os confrontos'}
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                <Filter className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs sm:text-sm font-black text-white uppercase tracking-wider">
-                    EXPLORAR CONFRONTOS (JOGO A JOGO)
-                  </span>
-                  <span className="text-[10px] sm:text-[11px] font-bold px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700">
-                    {filteredConfrontos.length} de {stats.totalConfrontos} jogos
-                  </span>
-                </div>
-                <p className="text-[10px] sm:text-[11px] text-zinc-400 truncate mt-0.5">
-                  {isExplorarExpanded
-                    ? 'Toque para recolher esta lista e deixar a visualização mais limpa'
-                    : 'Toque para expandir e ver placares, odds, filtros e histórico jogo a jogo'}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[11px] font-bold text-indigo-400 group-hover:text-indigo-300 hidden sm:inline">
-                {isExplorarExpanded ? 'Recolher' : 'Expandir'}
-              </span>
-              <div className="w-7 h-7 rounded-lg bg-[#22222a] border border-zinc-700/60 flex items-center justify-center text-zinc-300 group-hover:text-white transition-colors">
-                {isExplorarExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </div>
-            </div>
-          </div>
-
-          {!isExplorarExpanded ? (
-            /* Card compacto quando recolhido */
-            <div
-              onClick={() => setIsExplorarExpanded(true)}
-              className="p-4 rounded-xl bg-[#16161c] border border-dashed border-[#2c2c38] text-center text-xs text-zinc-400 hover:text-white hover:border-indigo-500/50 cursor-pointer transition-all flex flex-col sm:flex-row items-center justify-center gap-2 select-none"
-            >
+      {/* 3. CONTEÚDO DAS 8 SEÇÕES */}
+      <div className="p-4 sm:p-6 lg:p-8 space-y-6">
+        {/* ======================================================== */}
+        {/* 1. VISÃO GERAL */}
+        {/* ======================================================== */}
+        {activeTab === 'visao-geral' && (
+          <div className="space-y-6">
+            {/* Box Didático de Destaque */}
+            <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-900 border border-indigo-800/40 space-y-3">
               <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
-                <span className="font-bold text-white">Lista de confrontos recolhida</span>
+                <span className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-400">
+                  <Zap className="w-5 h-5" />
+                </span>
+                <h2 className="text-lg sm:text-xl font-bold text-white">
+                  Diagnóstico Central: 80,1% de Acerto Individual vs 53,1% no Bilhete Triplo
+                </h2>
               </div>
-              <span className="text-zinc-500 hidden sm:inline">•</span>
-              <span>
-                Total de <strong>{stats.totalConfrontos} confrontos</strong> ({stats.totalGreens} Greens / {stats.totalReds} Reds)
-              </span>
-              <span className="text-indigo-400 font-black text-[11px] underline ml-1">
-                Toque para expandir e rolar para baixo ▼
-              </span>
+              <p className="text-slate-300 text-xs sm:text-sm leading-relaxed max-w-4xl">
+                A auditoria de todos os <strong>{summary.totalTickets} jogos</strong> registrados durante os três meses demonstra que a capacidade de prever partidas com Over 1.5 gols é de{' '}
+                <strong className="text-cyan-400 font-bold">80,1% por partida</strong> (383 acertos em 513 seleções).
+                No entanto, a exigência de acertar <strong>3 de 3 jogos</strong> em cada bilhete fez com que{' '}
+                <strong className="text-rose-400 font-bold">75,0% dos REDs (57 de 76)</strong> fossem causados pela falha de apenas 1 jogo isolado, enquanto os outros 2 bateram com folga.
+              </p>
             </div>
-          ) : (
-            <div className="space-y-3 sm:space-y-4">
-              {/* Header de Filtros */}
-              <div className="space-y-2.5 sm:space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-[#222228] pb-2.5">
-                  <div className="flex items-center gap-2 text-white font-black text-xs uppercase tracking-wider">
-                    <Filter className="w-4 h-4 text-indigo-400" />
-                    <span>FILTROS DE BUSCA & STATUS</span>
+
+            {/* Comparativo Mês a Mês */}
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white mb-3 flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-indigo-400" />
+                Desempenho por Mês (Setembro, Outubro e Novembro)
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                    <span className="font-bold text-white text-sm">Setembro / 2026</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">39 Bilhetes</span>
                   </div>
-                  <span className="text-[10px] sm:text-[11px] text-zinc-400 font-bold">
-                    Exibindo {filteredConfrontos.length} de {stats.totalConfrontos} confrontos
-                  </span>
-                </div>
-
-            {/* Banner de Filtros Ativos quando filtrado por Time, Liga, Método, Mercado ou Busca */}
-            {(filterTeam || selectedLeague !== 'all' || selectedMethod !== 'all' || selectedMarket !== 'all' || searchQuery.trim()) && (
-              <div className="p-3 sm:p-3.5 rounded-xl bg-[#1a1728] border border-indigo-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-sm">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] font-black text-indigo-300 uppercase tracking-wide flex items-center gap-1.5">
-                    <Filter className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                    Filtro Ativo:
-                  </span>
-                  {filterTeam && (
-                    <span className="px-2.5 py-1 rounded-lg bg-indigo-500/20 text-white font-black text-xs border border-indigo-400/40 flex items-center gap-1.5">
-                      <span>Clube: <strong>{filterTeam}</strong></span>
-                      <span className="text-[10px] text-zinc-300 bg-black/40 px-1.5 py-0.5 rounded font-bold">
-                        {preStatusMatches.length} jogos ({preStatusGreens}G / {preStatusReds}R)
-                      </span>
-                      <button
-                        onClick={() => setFilterTeam(null)}
-                        className="text-zinc-400 hover:text-white ml-1 font-bold cursor-pointer"
-                        title="Remover filtro de clube"
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  )}
-                  {selectedLeague !== 'all' && (
-                    <span className="px-2.5 py-1 rounded-lg bg-indigo-500/20 text-white font-black text-xs border border-indigo-400/40 flex items-center gap-1.5">
-                      <span>Liga: <strong>{selectedLeague}</strong></span>
-                      <span className="text-[10px] text-zinc-300 bg-black/40 px-1.5 py-0.5 rounded font-bold">
-                        {preStatusMatches.length} jogos ({preStatusGreens}G / {preStatusReds}R)
-                      </span>
-                      <button
-                        onClick={() => setSelectedLeague('all')}
-                        className="text-zinc-400 hover:text-white ml-1 font-bold cursor-pointer"
-                        title="Remover filtro de liga"
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  )}
-                  {selectedMethod !== 'all' && (
-                    <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 font-black text-xs border border-amber-400/40 flex items-center gap-1.5">
-                      <span>
-                        Método:{' '}
-                        <strong>
-                          {selectedMethod === 'any_fire'
-                            ? 'Foguinho (Geral)'
-                            : selectedMethod === 'fire_1'
-                            ? '1 Foguinho (1 🔥)'
-                            : selectedMethod === 'fire_2'
-                            ? '2 Foguinhos (2 🔥)'
-                            : selectedMethod === 'fire_3_plus'
-                            ? '3+ Foguinhos (3+ 🔥)'
-                            : 'Derrota Recente (🔻)'}
-                        </strong>
-                      </span>
-                      <span className="text-[10px] text-zinc-300 bg-black/40 px-1.5 py-0.5 rounded font-bold">
-                        {preStatusMatches.length} jogos ({preStatusGreens}G / {preStatusReds}R)
-                      </span>
-                      <button
-                        onClick={() => setSelectedMethod('all')}
-                        className="text-zinc-400 hover:text-white ml-1 font-bold cursor-pointer"
-                        title="Remover filtro de método"
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  )}
-                  {selectedMarket !== 'all' && (
-                    <span className="px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 font-black text-xs border border-purple-400/40 flex items-center gap-1.5">
-                      <span>
-                        Mercado:{' '}
-                        <strong>
-                          {selectedMarket === 'double_chance'
-                            ? 'Dupla Chance (X1 / X2)'
-                            : selectedMarket === 'over_1_5'
-                            ? 'Mais de 1.5 gols'
-                            : 'Vitória Simples'}
-                        </strong>
-                      </span>
-                      <span className="text-[10px] text-zinc-300 bg-black/40 px-1.5 py-0.5 rounded font-bold">
-                        {preStatusMatches.length} jogos ({preStatusGreens}G / {preStatusReds}R)
-                      </span>
-                      <button
-                        onClick={() => setSelectedMarket('all')}
-                        className="text-zinc-400 hover:text-white ml-1 font-bold cursor-pointer"
-                        title="Remover filtro de mercado"
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  )}
-                  {searchQuery && (
-                    <span className="px-2.5 py-1 rounded-lg bg-[#22222a] text-zinc-300 text-xs border border-zinc-700 flex items-center gap-1.5">
-                      <span>Busca: "{searchQuery}"</span>
-                      <button
-                        onClick={() => setSearchQuery('')}
-                        className="text-zinc-400 hover:text-white ml-1 font-bold cursor-pointer"
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  )}
-                </div>
-                <button
-                  onClick={handleClearFilters}
-                  className="text-xs text-rose-400 hover:text-rose-300 font-bold underline cursor-pointer self-start sm:self-auto shrink-0 py-0.5"
-                >
-                  Limpar todos os filtros ({stats.totalConfrontos} jogos)
-                </button>
-              </div>
-            )}
-
-            {/* Três Linhas de Filtros Responsivas: Status, Método (Foguinhos) e Mercado (Dupla Chance) */}
-            <div className="space-y-2">
-              {/* 1. Status Filter */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
-                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider shrink-0 mr-0.5 flex items-center gap-1">
-                  <Layers className="w-3 h-3 text-zinc-400" />
-                  Status:
-                </span>
-
-                <button
-                  onClick={() => setSelectedStatus('all')}
-                  className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                    selectedStatus === 'all'
-                      ? 'bg-white text-black border-white shadow-sm'
-                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                  }`}
-                >
-                  <span>Todos ({preStatusMatches.length})</span>
-                </button>
-
-                <button
-                  onClick={() => setSelectedStatus('red')}
-                  className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                    selectedStatus === 'red'
-                      ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
-                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                  }`}
-                >
-                  <XCircle className="w-3.5 h-3.5" />
-                  <span>Apenas REDs ({preStatusReds})</span>
-                </button>
-
-                <button
-                  onClick={() => setSelectedStatus('green')}
-                  className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                    selectedStatus === 'green'
-                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
-                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                  }`}
-                >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Apenas GREENs ({preStatusGreens})</span>
-                </button>
-
-                {preStatusPending > 0 && (
-                  <button
-                    onClick={() => setSelectedStatus('pending')}
-                    className={`px-3 py-1.5 rounded-xl text-[11px] font-black border transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                      selectedStatus === 'pending'
-                        ? 'bg-amber-600 text-white border-amber-500 shadow-sm'
-                        : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                    }`}
-                  >
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>Pendentes ({preStatusPending})</span>
-                  </button>
-                )}
-              </div>
-
-              {/* 2. Método / Foguinhos Filter */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
-                <span className="text-[10px] font-bold text-amber-500 uppercase tracking-wider shrink-0 mr-0.5 flex items-center gap-1">
-                  <Flame className="w-3 h-3 text-amber-400" />
-                  Método:
-                </span>
-
-                <button
-                  onClick={() => setSelectedMethod('all')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                    selectedMethod === 'all'
-                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/60 font-black'
-                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                  }`}
-                >
-                  Todos ({methodCounts.all})
-                </button>
-
-                <button
-                  onClick={() => setSelectedMethod('any_fire')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMethod === 'any_fire'
-                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
-                      : 'bg-[#18181e] text-amber-400 border-[#2a2a34] hover:border-amber-500/40'
-                  }`}
-                  title="Partidas de times com sequência de Foguinho (🔥)"
-                >
-                  <span>🔥 Foguinho</span>
-                  <span className="text-[10px] opacity-80 font-bold">({methodCounts.anyFire})</span>
-                </button>
-
-                <button
-                  onClick={() => setSelectedMethod('fire_1')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMethod === 'fire_1'
-                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
-                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-amber-500/40'
-                  }`}
-                  title="Sequência de exatamente 1 Foguinho (1 🔥)"
-                >
-                  <span>1 🔥</span>
-                  <span className="text-[10px] text-zinc-400 font-bold">({methodCounts.fire1})</span>
-                </button>
-
-                <button
-                  onClick={() => setSelectedMethod('fire_2')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMethod === 'fire_2'
-                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
-                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-amber-500/40'
-                  }`}
-                  title="Sequência de exatamente 2 Foguinhos (2 🔥)"
-                >
-                  <span>2 🔥</span>
-                  <span className="text-[10px] text-zinc-400 font-bold">({methodCounts.fire2})</span>
-                </button>
-
-                <button
-                  onClick={() => setSelectedMethod('fire_3_plus')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMethod === 'fire_3_plus'
-                      ? 'bg-amber-500 text-black border-amber-400 font-black shadow-xs'
-                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-amber-500/40'
-                  }`}
-                  title="Sequência de 3 ou mais Foguinhos (3+ 🔥)"
-                >
-                  <span>3+ 🔥</span>
-                  <span className="text-[10px] text-zinc-400 font-bold">({methodCounts.fire3Plus})</span>
-                </button>
-              </div>
-
-              {/* 3. Mercado Filter (Dupla Chance) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
-                <span className="text-[10px] font-bold text-purple-400 uppercase tracking-wider shrink-0 mr-0.5 flex items-center gap-1">
-                  <Target className="w-3 h-3 text-purple-400" />
-                  Mercado:
-                </span>
-
-                <button
-                  onClick={() => setSelectedMarket('all')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                    selectedMarket === 'all'
-                      ? 'bg-purple-500/20 text-purple-300 border-purple-500/60 font-black'
-                      : 'bg-[#18181e] text-zinc-400 border-[#2a2a34] hover:text-white'
-                  }`}
-                >
-                  Todos ({marketCounts.all})
-                </button>
-
-                <button
-                  onClick={() => setSelectedMarket('double_chance')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMarket === 'double_chance'
-                      ? 'bg-purple-600 text-white border-purple-400 font-black shadow-xs'
-                      : 'bg-[#18181e] text-purple-300 border-[#2a2a34] hover:border-purple-500/50'
-                  }`}
-                  title="Filtrar por Dupla Chance (X1, X2 / Dupla Hipótese)"
-                >
-                  <span>🎲 Dupla Chance (X1/X2)</span>
-                  <span className="text-[10px] font-bold opacity-80">({marketCounts.doubleChance})</span>
-                </button>
-
-                <button
-                  onClick={() => setSelectedMarket('over_1_5')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMarket === 'over_1_5'
-                      ? 'bg-sky-600 text-white border-sky-400 font-black shadow-xs'
-                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-sky-500/40'
-                  }`}
-                >
-                  <span>⚽ Mais de 1.5</span>
-                  <span className="text-[10px] text-zinc-400 font-bold">({marketCounts.over15})</span>
-                </button>
-
-                <button
-                  onClick={() => setSelectedMarket('winner')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1 ${
-                    selectedMarket === 'winner'
-                      ? 'bg-emerald-600 text-white border-emerald-400 font-black shadow-xs'
-                      : 'bg-[#18181e] text-zinc-300 border-[#2a2a34] hover:border-emerald-500/40'
-                  }`}
-                >
-                  <span>🏆 Vitória 1X2</span>
-                  <span className="text-[10px] text-zinc-400 font-bold">({marketCounts.winner})</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Linha de Busca & Filtro de Liga Ativa */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
-              <div className="relative flex-1">
-                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Buscar time, jogo, liga ou mercado..."
-                  className="w-full bg-[#18181e] border border-[#2a2a34] focus:border-indigo-500 text-white text-xs pl-8 pr-7 py-2 rounded-xl outline-none transition-all placeholder:text-zinc-600"
-                />
-                {searchQuery && (
-                  <button
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-zinc-500 hover:text-white cursor-pointer p-1"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* ============================================================== */}
-          {/* VISÃO MOBILE: CARDS RESPONSIVOS (Nenhum texto cortando ou atropelando) */}
-          {/* ============================================================== */}
-          <div className="block sm:hidden space-y-2.5">
-            {filteredConfrontos.length === 0 ? (
-              <div className="py-8 text-center text-zinc-500 text-xs">
-                Nenhum confronto encontrado com os filtros selecionados.
-              </div>
-            ) : (
-              filteredConfrontos.map((leg, legIdx) => {
-                const isRed = leg.status === 'red';
-                const isGreen = leg.status === 'green';
-                const isPending = leg.status === 'pending';
-
-                return (
-                  <div
-                    key={`${leg.id}_${legIdx}`}
-                    className={`p-3 rounded-xl border transition-all space-y-2 ${
-                      isRed
-                        ? 'bg-[#181316] border-rose-500/40 shadow-xs'
-                        : isGreen
-                        ? 'bg-[#131714] border-emerald-500/30'
-                        : 'bg-[#15151a] border-[#262632]'
-                    }`}
-                  >
-                    {/* Top Row: Data, Liga & Status Badge */}
-                    <div className="flex items-center justify-between gap-1.5 text-[10px]">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-zinc-400 font-bold shrink-0">
-                          {leg.betDate ? leg.betDate.split('-').slice(1).reverse().join('/') : '-'}
-                        </span>
-                        <span className="text-zinc-600">•</span>
-                        <span className="text-zinc-300 font-medium truncate max-w-[150px]">
-                          {leg.league}
-                        </span>
-                        {leg.isExotic && (
-                          <span className="text-[9px] text-amber-400 shrink-0" title="Liga Secundária/Periférica">
-                            ⚠️
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Status Badge */}
-                      <div className="shrink-0">
-                        {isGreen && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-black uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                            <CheckCircle2 className="w-3 h-3" />
-                            GREEN
-                          </span>
-                        )}
-                        {isRed && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                            <XCircle className="w-3 h-3" />
-                            RED
-                          </span>
-                        )}
-                        {isPending && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                            <Clock className="w-3 h-3" />
-                            PENDENTE
-                          </span>
-                        )}
-                      </div>
+                  <div className="text-xs space-y-1.5 text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-400 font-medium">Greens:</span>
+                      <span className="font-bold text-white">23 (59.0%)</span>
                     </div>
+                    <div className="flex justify-between">
+                      <span className="text-rose-400 font-medium">Reds:</span>
+                      <span className="font-bold text-white">16 (41.0%)</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                    <div className="bg-emerald-500 h-full" style={{ width: '59%' }} />
+                  </div>
+                </div>
 
-                    {/* Middle Row: Partida, Placar Grande & Badges de Método / Mercado */}
-                    <div className="flex items-center justify-between gap-2 pt-0.5">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-black text-white text-xs leading-tight">
-                          {leg.matchTitle}
-                        </div>
-                        <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-zinc-500 mt-1">
-                          <span>{leg.country}</span>
-                          <span>•</span>
-                          {/* Badge de Mercado */}
-                          {leg.isDoubleChance ? (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                              🎲 {leg.market === 'DC_1X' ? 'Dupla: X1 (Casa/Empate)' : leg.market === 'DC_X2' ? 'Dupla: X2 (Fora/Empate)' : 'Dupla Chance'}
-                            </span>
-                          ) : (
-                            <span className="text-zinc-400 font-medium">
-                              {leg.marketLabel}
-                            </span>
-                          )}
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                    <span className="font-bold text-white text-sm">Outubro / 2026</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">114 Bilhetes</span>
+                  </div>
+                  <div className="text-xs space-y-1.5 text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-400 font-medium">Greens:</span>
+                      <span className="font-bold text-white">58 (50.9%)</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-rose-400 font-medium">Reds:</span>
+                      <span className="font-bold text-white">55 (48.2%)</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+                    <div className="bg-emerald-500 h-full" style={{ width: '51%' }} />
+                  </div>
+                </div>
 
-                          {/* Badge de Método (Foguinho ou Derrota) */}
-                          {leg.fireStreak > 0 && (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-0.5">
-                              <span>🔥</span>
-                              <span>{leg.fireStreak}x Foguinho</span>
-                            </span>
-                          )}
-                          {leg.lossStreak > 0 && (
-                            <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/40 flex items-center gap-0.5">
-                              <span>🔻</span>
-                              <span>{leg.lossStreak}x Derrota</span>
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                  <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                    <span className="font-bold text-white text-sm">Novembro / 2026</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">24 Bilhetes</span>
+                  </div>
+                  <div className="text-xs space-y-1.5 text-slate-300">
+                    <div className="flex justify-between">
+                      <span className="text-emerald-400 font-medium">Greens:</span>
+                      <span className="font-bold text-white">5 (35.7% liquidadas)</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-rose-400 font-medium">Reds:</span>
+                      <span className="font-bold text-white">5</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-amber-400 font-medium">Pendentes:</span>
+                      <span className="font-bold text-amber-400">14 aguardando</span>
+                    </div>
+                  </div>
+                  <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden flex">
+                    <div className="bg-emerald-500 h-full" style={{ width: '25%' }} />
+                    <div className="bg-rose-500 h-full" style={{ width: '25%' }} />
+                    <div className="bg-amber-500 h-full" style={{ width: '50%' }} />
+                  </div>
+                </div>
+              </div>
+            </div>
 
-                      {/* Placar Real em Destaque */}
-                      <div className="shrink-0 text-center">
-                        {leg.score?.ft ? (
+            {/* Explorador de Todos os 176 Bilhetes / Jogos Registrados */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                    <Compass className="w-5 h-5 text-indigo-400" />
+                    Varredura Completa dos 176 Bilhetes do Balanço
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Navegue e pesquise individualmente cada uma das apostas dos 3 meses com seus 3 jogos detalhados.
+                  </p>
+                </div>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 self-start sm:self-auto">
+                  Exibindo {filteredTickets.length} de {MASTER_RAIO_X_TICKETS.length} bilhetes
+                </span>
+              </div>
+
+              {/* Controles de Filtro do Explorador */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-800">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    value={ticketSearch}
+                    onChange={(e) => setTicketSearch(e.target.value)}
+                    placeholder="Buscar time, liga ou país..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <select
+                    value={ticketStatusFilter}
+                    onChange={(e) => setTicketStatusFilter(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="all">Todos os Resultados (Greens, Reds e Pendentes)</option>
+                    <option value="Ganha">Apenas GREENS (Vencedores)</option>
+                    <option value="Perdida">Apenas REDS (Perdidos)</option>
+                    <option value="Pendente">Apenas Pendentes</option>
+                  </select>
+                </div>
+
+                <div>
+                  <select
+                    value={ticketMonthFilter}
+                    onChange={(e) => setTicketMonthFilter(e.target.value as any)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="all">Todos os Meses</option>
+                    <option value="2026-11">Novembro / 2026</option>
+                    <option value="2026-10">Outubro / 2026</option>
+                    <option value="2026-09">Setembro / 2026</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Lista dos Bilhetes */}
+              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                {filteredTickets.map((t) => {
+                  const isExpanded = expandedTicketId === t.id;
+                  const isGreen = t.status === 'Ganha';
+                  const isRed = t.status === 'Perdida';
+
+                  return (
+                    <div
+                      key={t.id}
+                      className={`p-3.5 rounded-xl border transition ${
+                        isGreen
+                          ? 'bg-emerald-950/10 border-emerald-800/30 hover:border-emerald-700/50'
+                          : isRed
+                          ? 'bg-rose-950/10 border-rose-800/30 hover:border-rose-700/50'
+                          : 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
                           <span
-                            className={`px-2.5 py-1 rounded-lg text-xs font-black font-sans block ${
-                              isRed
-                                ? 'bg-rose-500/25 text-rose-300 border border-rose-500/40'
-                                : 'bg-emerald-500/25 text-emerald-300 border border-emerald-500/40'
+                            className={`w-6 h-6 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 ${
+                              isGreen
+                                ? 'bg-emerald-500/20 text-emerald-400'
+                                : isRed
+                                ? 'bg-rose-500/20 text-rose-400'
+                                : 'bg-amber-500/20 text-amber-400'
                             }`}
                           >
-                            {leg.score.ft[0]} - {leg.score.ft[1]}
+                            #{t.ticketNumber}
                           </span>
-                        ) : (
-                          <span className="text-zinc-600 text-xs">-</span>
-                        )}
+                          <div>
+                            <span className="text-xs font-bold text-white block line-clamp-1">{t.title}</span>
+                            <span className="text-[10px] text-slate-400">
+                              {t.date} • Odd @{t.odd.toFixed(2)} • {t.greenLegsCount} Greens / {t.redLegsCount} Reds
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <span
+                            className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+                              isGreen
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                                : isRed
+                                ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                                : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                            }`}
+                          >
+                            {t.status}
+                          </span>
+                          <button
+                            onClick={() => setExpandedTicketId(isExpanded ? null : t.id)}
+                            className="p-1 rounded bg-slate-800 text-slate-300 hover:bg-slate-700 transition"
+                          >
+                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
                       </div>
+
+                      {/* 3 Jogos Detalhados */}
+                      {isExpanded && (
+                        <div className="mt-3 pt-3 border-t border-slate-800 space-y-2 animate-fade-in">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                            Partidas Selecionadas no Bilhete:
+                          </span>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            {t.legs.map((leg, li) => (
+                              <div
+                                key={li}
+                                className={`p-2.5 rounded-lg border text-xs space-y-1 ${
+                                  leg.status === 'green'
+                                    ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-300'
+                                    : leg.status === 'red'
+                                    ? 'bg-rose-950/20 border-rose-800/40 text-rose-300'
+                                    : 'bg-slate-950 border-slate-800 text-slate-300'
+                                }`}
+                              >
+                                <div className="flex justify-between items-center font-bold">
+                                  <span className="line-clamp-1">{leg.matchTitle}</span>
+                                  <span className="text-[11px] font-black">{leg.score}</span>
+                                </div>
+                                <div className="text-[10px] text-slate-400 flex justify-between">
+                                  <span>{leg.league}</span>
+                                  <span>{leg.country}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
 
-                    {/* Bottom Row: Diagnóstico do Motivo */}
-                    <div className="pt-2 border-t border-[#22222c] flex items-center justify-between gap-2 text-[10px]">
-                      <div className="min-w-0 flex-1">
-                        {isRed ? (
-                          <span className="font-bold text-rose-400 block leading-tight">
-                            {leg.redReason}
-                          </span>
-                        ) : isGreen ? (
-                          <span className="font-medium text-emerald-400/90 block leading-tight">
-                            {leg.isDoubleChance
-                              ? `Dupla Chance confirmada (${leg.score?.ft ? `${leg.score.ft[0]}x${leg.score.ft[1]}` : 'Green'})`
-                              : `Linha batida (${leg.totalGoals} gols no jogo)`}
-                          </span>
-                        ) : (
-                          <span className="text-zinc-500 block">Aguardando resultado</span>
-                        )}
-                      </div>
+        {/* ======================================================== */}
+        {/* 2. ANÁLISE DOS GREENS */}
+        {/* ======================================================== */}
+        {activeTab === 'analise-greens' && (
+          <div className="space-y-6">
+            <div className="bg-gradient-to-br from-emerald-950/30 via-slate-900 to-slate-900 p-5 rounded-2xl border border-emerald-800/40 space-y-2">
+              <div className="flex items-center gap-3">
+                <span className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
+                  <ShieldCheck className="w-6 h-6" />
+                </span>
+                <div>
+                  <h3 className="text-lg sm:text-xl font-bold text-white">
+                    Análise dos 86 Bilientes GREEN: Onde Tivemos Sucesso
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-300 mt-0.5">
+                    Média de <strong className="text-emerald-400">3,76 gols por partida</strong> nos bilhetes vitoriosos.
+                  </p>
+                </div>
+              </div>
+            </div>
 
-                      <div className="text-right shrink-0 text-zinc-400 font-bold">
-                        Odd @{leg.betOdd.toFixed(2)}
-                      </div>
+            {/* 3 Pilares dos GREENS */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {RAIO_X_GREEN_PATTERNS.map((p) => (
+                <div key={p.id} className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    {p.stats}
+                  </span>
+                  <h4 className="font-bold text-white text-sm">{p.title}</h4>
+                  <p className="text-xs text-slate-400 leading-relaxed">{p.description}</p>
+                  <div className="pt-2 border-t border-slate-800 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-slate-300 block">Exemplos Vitoriosos:</span>
+                    <ul className="text-xs text-slate-400 space-y-0.5">
+                      {p.examples.map((ex, i) => (
+                        <li key={i} className="flex items-center gap-1.5">
+                          <Check className="w-3 h-3 text-emerald-400 shrink-0" />
+                          <span>{ex}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Matriz Comparativa */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5 space-y-3">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-emerald-400" />
+                O que diferencia as apostas GREEN das apostas RED no Over 1.5
+              </h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="p-3">Critério de Seleção</th>
+                      <th className="p-3 text-emerald-400">Bilhetes GREEN (Vencedores)</th>
+                      <th className="p-3 text-rose-400">Bilhetes RED (Perdidos)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    <tr>
+                      <td className="p-3 font-semibold text-white">Média de Gols</td>
+                      <td className="p-3 text-emerald-400 font-bold">3,76 gols por partida</td>
+                      <td className="p-3 text-rose-400 font-bold">0,65 gols na perna perdedora</td>
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-semibold text-white">Tipo de Competição</td>
+                      <td className="p-3 text-slate-300">Ligas de alta transição (MLS, Holanda, Alemanha, México, Polônia)</td>
+                      <td className="p-3 text-slate-300">Ligas periféricas defensivas (Nigéria, Chipre, Iraque, Azerbaijão)</td>
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-semibold text-white">Comportamento do Adversário</td>
+                      <td className="p-3 text-slate-300">Transição aberta, linhas altas e busca pelo empate</td>
+                      <td className="p-3 text-slate-300">Linha de 5 zagueiros e retranca intransponível</td>
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-semibold text-white">Primeiro Gol</td>
+                      <td className="p-3 text-slate-300">Acontece antes dos 35 minutos do 1º tempo</td>
+                      <td className="p-3 text-slate-300">0-0 prolongado até os 75' ou gol solitário</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* 3. ANÁLISE DOS REDS */}
+        {/* ======================================================== */}
+        {activeTab === 'analise-reds' && (
+          <div className="space-y-6">
+            <div className="bg-gradient-to-br from-rose-950/30 via-slate-900 to-slate-900 p-5 rounded-2xl border border-rose-800/40 space-y-2">
+              <div className="flex items-center gap-3">
+                <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400">
+                  <ShieldAlert className="w-6 h-6" />
+                </span>
+                <div>
+                  <h3 className="text-lg sm:text-xl font-bold text-white">
+                    Análise Profunda dos 76 Bilhetes RED: Onde Ocorreram as Perdas
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-300 mt-0.5">
+                    Em exatamente <strong className="text-rose-400 font-bold">75,0% das perdas</strong>, 2 jogos bateram o Over 1.5 e apenas 1 falhou por 0-0 ou 1-0.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Os 5 Padrões Recorrentes de Erro */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
+                Padrões Recorrentes Identificados nas Derrotas
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {RAIO_X_ERROR_PATTERNS.map((err) => (
+                  <div key={err.id} className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+                    <div className="flex justify-between items-start gap-2">
+                      <span className="font-bold text-white text-xs sm:text-sm">{err.title}</span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/30 whitespace-nowrap">
+                        {err.frequency}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 leading-relaxed">{err.description}</p>
+                    <div className="pt-2 border-t border-slate-800 text-xs">
+                      <strong className="text-emerald-400">Solução Prática:</strong>{' '}
+                      <span className="text-slate-300">{err.countermeasure}</span>
                     </div>
                   </div>
-                );
-              })
-            )}
+                ))}
+              </div>
+            </div>
+
+            {/* Visualizador de Todos os 76 REDs com placar real */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5 space-y-3">
+              <h4 className="text-sm font-bold text-white flex items-center justify-between">
+                <span>Relação Detalhada dos 76 Bilhetes RED</span>
+                <span className="text-xs text-rose-400 font-medium">76 bilhetes catalogados</span>
+              </h4>
+              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                {RAIO_X_DETAILED_REDS.map((r) => (
+                  <div key={r.id} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="text-rose-400 font-bold">#{r.ticketNumber}</span>
+                        <span className="text-white font-bold">{r.title}</span>
+                      </div>
+                      <span className="text-slate-400 text-[11px]">{r.date} • Odd @{r.odd.toFixed(2)}</span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/60">
+                      {r.reasons.map((fail, fi) => (
+                        <div key={fi} className="p-2 rounded bg-rose-950/20 border border-rose-800/40 text-rose-300">
+                          <span className="font-bold block">❌ {fail.matchTitle} ({fail.score})</span>
+                          <span className="text-[10px] text-slate-400">{fail.league} • Motivo: {fail.categoryLabel}</span>
+                        </div>
+                      ))}
+                      {r.passedLegs.map((ok, oi) => (
+                        <div key={oi} className="p-2 rounded bg-emerald-950/20 border border-emerald-800/40 text-emerald-300">
+                          <span className="font-bold block">✓ {ok.matchTitle} ({ok.score})</span>
+                          <span className="text-[10px] text-slate-400">{ok.league}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
+        )}
 
-          {/* ============================================================== */}
-          {/* VISÃO DESKTOP / TABLET: TABELA COMPLETA */}
-          {/* ============================================================== */}
-          <div className="hidden sm:block overflow-x-auto -mx-4 sm:mx-0">
-            <table className="w-full text-left border-collapse min-w-[700px]">
-              <thead>
-                <tr className="border-b border-[#24242a] text-[10px] font-black text-zinc-500 uppercase tracking-wider bg-[#18181e]/80">
-                  <th className="py-2.5 px-3">Data</th>
-                  <th className="py-2.5 px-3">Confronto</th>
-                  <th className="py-2.5 px-3">Liga / País</th>
-                  <th className="py-2.5 px-3">Mercado</th>
-                  <th className="py-2.5 px-3">Método</th>
-                  <th className="py-2.5 px-3 text-center">Placar Real</th>
-                  <th className="py-2.5 px-3 text-center">Resultado</th>
-                  <th className="py-2.5 px-3">Motivo / Análise</th>
-                  <th className="py-2.5 px-3 text-right">Bilhete</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#1e1e24] text-xs">
-                {filteredConfrontos.length === 0 ? (
-                  <tr>
-                    <td colSpan={9} className="py-8 text-center text-zinc-500 text-xs">
-                      Nenhum confronto encontrado com os filtros selecionados.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredConfrontos.map((leg, legIdx) => {
-                    const isRed = leg.status === 'red';
-                    const isGreen = leg.status === 'green';
-                    const isPending = leg.status === 'pending';
+        {/* ======================================================== */}
+        {/* 4. RANKING COMPLETO DE LIGAS (125 LIGAS NOMINAIS) */}
+        {/* ======================================================== */}
+        {activeTab === 'ranking-ligas' && (
+          <div className="space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 p-4 rounded-2xl border border-slate-800">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                  <Globe className="w-5 h-5 text-indigo-400" />
+                  Ranking Nominal de Todas as 125 Competições
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Todas as ligas e copas identificadas com nome completo e país (sem classificações genéricas).
+                </p>
+              </div>
 
-                    return (
-                      <tr
-                        key={`${leg.id}_${legIdx}`}
-                        className={`transition-colors ${
-                          isRed
-                            ? 'bg-rose-500/5 hover:bg-rose-500/10'
-                            : isGreen
-                            ? 'hover:bg-emerald-500/5'
-                            : 'hover:bg-[#1a1a20]'
-                        }`}
-                      >
-                        {/* Data */}
-                        <td className="py-2.5 px-3 whitespace-nowrap text-zinc-400 font-bold text-[11px]">
-                          {leg.betDate ? leg.betDate.split('-').slice(1).reverse().join('/') : '-'}
+              <div className="flex flex-wrap items-center gap-2">
+                {[
+                  { id: 'all', label: 'Todas (125)' },
+                  { id: 'RECOMENDADA', label: 'Recomendadas (Alta Confiança)' },
+                  { id: 'EVITAR', label: 'Alto Risco (Evitar)' },
+                ].map((btn) => (
+                  <button
+                    key={btn.id}
+                    onClick={() => setLeagueFilter(btn.id as any)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                      leagueFilter === btn.id
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {btn.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Busca de Liga */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+              <input
+                type="text"
+                value={leagueSearch}
+                onChange={(e) => setLeagueSearch(e.target.value)}
+                placeholder="Pesquisar por nome da competição ou país..."
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            {/* Tabela Oficial das 125 Ligas */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+              <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0 z-10">
+                    <tr>
+                      <th className="p-3">Nome Completo da Liga</th>
+                      <th className="p-3">País</th>
+                      <th className="p-3 text-center">Jogos</th>
+                      <th className="p-3 text-center text-emerald-400">Greens</th>
+                      <th className="p-3 text-center text-rose-400">Reds</th>
+                      <th className="p-3 text-center">Assertividade</th>
+                      <th className="p-3 text-center">Média Gols</th>
+                      <th className="p-3">Diagnóstico & Recomendação</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {filteredLeagues.map((l, idx) => (
+                      <tr key={idx} className="hover:bg-slate-800/40 transition">
+                        <td className="p-3 font-bold text-white flex items-center gap-2">
+                          <Globe className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <span>{l.name}</span>
                         </td>
-
-                        {/* Confronto */}
-                        <td className="py-2.5 px-3">
-                          <div className="font-black text-white text-xs truncate max-w-[200px]">
-                            {leg.matchTitle}
-                          </div>
-                          <div className="text-[10px] text-zinc-500 truncate">
-                            {leg.team1} vs {leg.team2}
-                          </div>
-                        </td>
-
-                        {/* Liga / País */}
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          <span className="text-zinc-300 font-bold text-[11px] block truncate max-w-[140px]">
-                            {leg.league}
+                        <td className="p-3 text-slate-400">{l.country}</td>
+                        <td className="p-3 text-center font-semibold text-slate-200">{l.totalMatches}</td>
+                        <td className="p-3 text-center font-bold text-emerald-400">{l.greens}</td>
+                        <td className="p-3 text-center font-bold text-rose-400">{l.reds}</td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`font-black px-2 py-0.5 rounded text-[11px] ${
+                              l.winRate >= 80
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                                : l.winRate <= 60 && (l.greens + l.reds) >= 2
+                                ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                                : 'bg-slate-800 text-slate-300'
+                            }`}
+                          >
+                            {l.winRate}%
                           </span>
-                          <span className="text-[10px] text-zinc-500 block">
-                            {leg.country} {leg.isExotic ? '⚠️' : ''}
-                          </span>
                         </td>
-
-                        {/* Mercado */}
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          {leg.isDoubleChance ? (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-black bg-purple-500/20 border border-purple-500/40 text-purple-300">
-                              🎲 {leg.market === 'DC_1X' ? 'Dupla: X1' : leg.market === 'DC_X2' ? 'Dupla: X2' : 'Dupla Chance'}
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#22222c] border border-[#2e2e3a] text-zinc-300">
-                              {leg.marketLabel}
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Método */}
-                        <td className="py-2.5 px-3 whitespace-nowrap">
-                          {leg.fireStreak > 0 ? (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-black bg-amber-500/20 border border-amber-500/40 text-amber-300 flex items-center gap-1 w-fit">
-                              <span>🔥</span>
-                              <span>{leg.fireStreak}x Foguinho</span>
-                            </span>
-                          ) : leg.lossStreak > 0 ? (
-                            <span className="px-2 py-0.5 rounded text-[10px] font-black bg-rose-500/20 border border-rose-500/40 text-rose-300 flex items-center gap-1 w-fit">
-                              <span>🔻</span>
-                              <span>{leg.lossStreak}x Derrota</span>
-                            </span>
-                          ) : (
-                            <span className="text-zinc-600 text-[10px]">-</span>
-                          )}
-                        </td>
-
-                        {/* Placar Real */}
-                        <td className="py-2.5 px-3 text-center whitespace-nowrap font-black font-sans">
-                          {leg.score?.ft ? (
-                            <span
-                              className={`px-2 py-0.5 rounded text-xs font-black ${
-                                isRed
-                                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                              }`}
-                            >
-                              {leg.score.ft[0]} - {leg.score.ft[1]}
-                            </span>
-                          ) : (
-                            <span className="text-zinc-600 text-xs">-</span>
-                          )}
-                        </td>
-
-                        {/* Resultado */}
-                        <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                          {isGreen && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                              <CheckCircle2 className="w-3 h-3" />
-                              GREEN
-                            </span>
-                          )}
-                          {isRed && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black uppercase bg-rose-500/20 text-rose-400 border border-rose-500/30">
-                              <XCircle className="w-3 h-3" />
-                              RED
-                            </span>
-                          )}
-                          {isPending && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                              <Clock className="w-3 h-3" />
-                              PENDENTE
-                            </span>
-                          )}
-                        </td>
-
-                        {/* Motivo / Análise */}
-                        <td className="py-2.5 px-3">
-                          {isRed ? (
-                            <span className="text-[11px] font-bold text-rose-400 block leading-tight">
-                              {leg.redReason}
-                            </span>
-                          ) : isGreen ? (
-                            <span className="text-[11px] font-medium text-emerald-400/90 block leading-tight">
-                              {leg.isDoubleChance
-                                ? `Dupla Chance confirmada (${leg.score?.ft ? `${leg.score.ft[0]}x${leg.score.ft[1]}` : 'Green'})`
-                                : `Linha batida (${leg.totalGoals} gols no total)`}
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-zinc-500 block">Aguardando resultado</span>
-                          )}
-                        </td>
-
-                        {/* Bilhete */}
-                        <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                          <span className="text-[10px] font-bold text-zinc-400 block">
-                            Odd @{leg.betOdd.toFixed(2)}
-                          </span>
-                          <span className="text-[9px] text-zinc-500 block">
-                            {leg.betFormat}
+                        <td className="p-3 text-center text-slate-300 font-semibold">{l.avgGoals}</td>
+                        <td className="p-3">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                              l.classification === 'RECOMENDADA'
+                                ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                                : l.classification === 'EVITAR'
+                                ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
+                                : 'bg-slate-800 text-slate-400'
+                            }`}
+                          >
+                            {l.tierLabel}
                           </span>
                         </td>
                       </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
-    </div>
-  )}
+        )}
 
-      {/* 8. BOX CONCLUSIVO DE ESTRATÉGIA E ASSERTIVIDADE */}
-      <div className="bg-gradient-to-r from-[#171720] via-[#1a1a24] to-[#15151e] border border-[#2c2c38] rounded-2xl p-3.5 sm:p-5 shadow-sm space-y-2">
-        <div className="flex items-center gap-2 text-white font-black text-xs uppercase tracking-wider">
-          <Sparkles className="w-4 h-4 text-[#ccff00] shrink-0" />
-          <span>PLANO DE AÇÃO PARA ELEVAR A ASSERTIVIDADE</span>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-0.5 text-[11px] text-zinc-300">
-          <div className="p-2.5 sm:p-3 bg-[#131318] rounded-xl border border-[#22222a] space-y-1">
-            <strong className="text-emerald-400 block font-bold text-xs">1. Filtrar Ligas de Baixa Média</strong>
-            <p className="text-zinc-400 leading-snug text-[10px] sm:text-[11px]">
-              Evitar incluir torneios periféricos (Honduras, Letônia, Uzbequistão) em bilhetes múltiplos.
-            </p>
+        {/* ======================================================== */}
+        {/* 5. RANKING COMPLETO DE CLUBES (599 CLUBES) */}
+        {/* ======================================================== */}
+        {activeTab === 'ranking-clubes' && (
+          <div className="space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900 p-4 rounded-2xl border border-slate-800">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                  <Award className="w-5 h-5 text-indigo-400" />
+                  Relação Completa de Clubes Auditados
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Desempenho real de cada equipe participante nos 176 jogos catalogados no Balanço.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {[
+                  { id: 'all', label: 'Todos os Clubes (599)' },
+                  { id: 'MAIOR_ASSERTIVIDADE', label: 'Maior Assertividade (139)' },
+                  { id: 'RISCO_RED', label: 'Maior Risco de RED (25)' },
+                  { id: 'EM_OBSERVACAO', label: 'Em Observação' },
+                ].map((btn) => (
+                  <button
+                    key={btn.id}
+                    onClick={() => setClubFilter(btn.id as any)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
+                      clubFilter === btn.id
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {btn.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Busca de Clube */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+              <input
+                type="text"
+                value={clubSearch}
+                onChange={(e) => setClubSearch(e.target.value)}
+                placeholder="Pesquisar por clube, país ou competição..."
+                className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            {/* Tabela dos Clubes */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 overflow-hidden">
+              <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0 z-10">
+                    <tr>
+                      <th className="p-3">Nome do Clube</th>
+                      <th className="p-3">País / Liga</th>
+                      <th className="p-3 text-center">Jogos</th>
+                      <th className="p-3 text-center text-emerald-400">Greens</th>
+                      <th className="p-3 text-center text-rose-400">Reds</th>
+                      <th className="p-3 text-center">Assertividade</th>
+                      <th className="p-3 text-center">Média Gols</th>
+                      <th className="p-3">Classificação e Diagnóstico</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {filteredClubs.slice(0, 80).map((c, idx) => (
+                      <tr key={idx} className="hover:bg-slate-800/40 transition">
+                        <td className="p-3 font-bold text-white">{c.name}</td>
+                        <td className="p-3 text-slate-400">{c.country} • {c.league}</td>
+                        <td className="p-3 text-center font-semibold text-slate-200">{c.totalMatches}</td>
+                        <td className="p-3 text-center font-bold text-emerald-400">{c.greens}</td>
+                        <td className="p-3 text-center font-bold text-rose-400">{c.reds}</td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`font-black px-2 py-0.5 rounded text-[11px] ${
+                              c.winRate >= 80 && (c.greens + c.reds) >= 2
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                                : c.winRate <= 60 && c.reds >= 2
+                                ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                                : 'bg-slate-800 text-slate-300'
+                            }`}
+                          >
+                            {c.winRate}%
+                          </span>
+                        </td>
+                        <td className="p-3 text-center text-slate-300 font-semibold">{c.avgGoals}</td>
+                        <td className="p-3 text-slate-300 text-[11px] max-w-xs">{c.diagnosticNote}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
-          <div className="p-2.5 sm:p-3 bg-[#131318] rounded-xl border border-[#22222a] space-y-1">
-            <strong className="text-sky-400 block font-bold text-xs">2. Dobras de Confiança</strong>
-            <p className="text-zinc-400 leading-snug text-[10px] sm:text-[11px]">
-              Com 82,4% de acerto individual, priorize duplas em vez de triplas para reduzir a variância de 1 gol faltante.
-            </p>
+        )}
+
+        {/* ======================================================== */}
+        {/* 6. CLUBES RECOMENDADOS (ALTA ASSERTIVIDADE) */}
+        {/* ======================================================== */}
+        {activeTab === 'clubes-recomendados' && (
+          <div className="space-y-5">
+            <div className="bg-gradient-to-br from-emerald-950/30 via-slate-900 to-slate-900 p-5 rounded-2xl border border-emerald-800/40">
+              <div className="flex items-center gap-3">
+                <span className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400">
+                  <CheckCircle className="w-6 h-6" />
+                </span>
+                <div>
+                  <h3 className="text-lg font-bold text-white">
+                    Clubes com Maior Assertividade no Over 1.5 (Priorizar)
+                  </h3>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Equipes com excelente volume ofensivo e 100% de cumprimento da linha nos registros do Balanço.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {MASTER_TOP_ASSERTIVE_CLUBS.slice(0, 30).map((c, i) => (
+                <div key={i} className="bg-slate-900 border border-slate-800/80 rounded-xl p-4 space-y-2 hover:border-emerald-700/50 transition">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="font-bold text-white text-sm block">{c.name}</span>
+                      <span className="text-[10px] text-slate-400">{c.country} • {c.league}</span>
+                    </div>
+                    <span className="text-xs font-black text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
+                      {c.greens} Greens ({c.winRate}%)
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300">{c.diagnosticNote}</p>
+                  <div className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-800 flex justify-between">
+                    <span>Média de Gols: {c.avgGoals}</span>
+                    <span className="text-emerald-400 font-bold">✓ Recomendado</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="p-2.5 sm:p-3 bg-[#131318] rounded-xl border border-[#22222a] space-y-1">
-            <strong className="text-[#ccff00] block font-bold text-xs">3. Ligas de 100% de Green</strong>
-            <p className="text-zinc-400 leading-snug text-[10px] sm:text-[11px]">
-              Foque nas ligas da Turquia, Itália, França e Alemanha, onde a linha de gols bateu em 100% dos jogos.
-            </p>
+        )}
+
+        {/* ======================================================== */}
+        {/* 7. CLUBES PARA EVITAR (MAIOR RISCO DE RED) */}
+        {/* ======================================================== */}
+        {activeTab === 'clubes-evitar' && (
+          <div className="space-y-5">
+            <div className="bg-gradient-to-br from-rose-950/30 via-slate-900 to-slate-900 p-5 rounded-2xl border border-rose-800/40">
+              <div className="flex items-center gap-3">
+                <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400">
+                  <XCircle className="w-6 h-6" />
+                </span>
+                <div>
+                  <h3 className="text-lg font-bold text-white">
+                    Clubes com Maior Risco de RED (Evitar nas Próximas Seleções)
+                  </h3>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Equipes envolvidas em múltiplos REDs, com placares travados em 0-0 ou 1-0 no histórico do app.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {MASTER_HIGH_RISK_CLUBS.map((c, i) => (
+                <div key={i} className="bg-slate-900 border border-slate-800/80 rounded-xl p-4 space-y-2 hover:border-rose-700/50 transition">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="font-bold text-white text-sm block">{c.name}</span>
+                      <span className="text-[10px] text-slate-400">{c.country} • {c.league}</span>
+                    </div>
+                    <span className="text-xs font-black text-rose-400 bg-rose-950 px-2 py-0.5 rounded border border-rose-800">
+                      {c.reds} REDs acumulados
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300">{c.diagnosticNote}</p>
+                  <div className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-800 flex justify-between">
+                    <span>Jogos no App: {c.totalMatches}</span>
+                    <span className="text-rose-400 font-bold">⛔ Evitar no Over 1.5</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* 8. RECOMENDAÇÕES ESTRATÉGICAS & PESQUISA EXTERNA */}
+        {/* ======================================================== */}
+        {activeTab === 'recomendacoes-estrategicas' && (
+          <div className="space-y-6">
+            {/* Box Explicativo de Diferenciação Rigorosa */}
+            <div className="p-4 rounded-xl bg-indigo-950/30 border border-indigo-800/40 text-xs text-slate-300 leading-relaxed flex items-start gap-2.5">
+              <Info className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-white block font-bold mb-0.5">
+                  Diferenciação Obrigatória entre Dados Históricos do Aplicativo e Pesquisa Externa:
+                </strong>
+                As tabelas abaixo distinguem com clareza o que foi registrado internamente no Balanço Financeiro do aplicativo das médias consolidadas de mercado obtidas em sites de estatísticas esportivas (FootyStats, SoccerStats e OddAlerts).
+              </div>
+            </div>
+
+            {/* Bloco 1: Pesquisa Externa de Ligas Mundiais */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5 space-y-3">
+              <h4 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                <Globe className="w-4 h-4 text-cyan-400" />
+                Pesquisa Externa: Melhores e Piores Ligas Mundiais para Over 1.5 Gols
+              </h4>
+              <p className="text-xs text-slate-400">
+                Dados consolidados de mercado com histórico multitemporadas.
+              </p>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800">
+                    <tr>
+                      <th className="p-3">Competição Externa</th>
+                      <th className="p-3">País</th>
+                      <th className="p-3 text-center">Taxa Mundial Over 1.5</th>
+                      <th className="p-3 text-center">Média Gols/Jogo</th>
+                      <th className="p-3">Perfil Tático Comprovado</th>
+                      <th className="p-3 text-center">Veredito</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {EXTERNAL_RESEARCH_LEAGUES.map((l, idx) => (
+                      <tr key={idx} className="hover:bg-slate-800/40 transition">
+                        <td className="p-3 font-bold text-white">{l.name}</td>
+                        <td className="p-3 text-slate-400">{l.country}</td>
+                        <td className="p-3 text-center font-bold text-cyan-400">{l.over15Rate}</td>
+                        <td className="p-3 text-center font-semibold text-slate-200">{l.avgGoalsMatch}</td>
+                        <td className="p-3 text-slate-300 text-[11px] max-w-sm">{l.keyCharacteristic}</td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                              l.verdict === 'ALTAMENTE_RECOMENDADA'
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                            }`}
+                          >
+                            {l.verdict === 'ALTAMENTE_RECOMENDADA' ? 'Priorizar' : 'Evitar'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Bloco 2: Clubes Promissores Fora dos Favoritos Atuais */}
+            <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5 space-y-3">
+              <h4 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                Pesquisa Externa: Equipes Promissoras para Futuras Seleções
+              </h4>
+              <p className="text-xs text-slate-400">
+                Clubes com altos índices de Over 1.5 gols no cenário internacional que podem ser adicionados à lista de observação:
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {EXTERNAL_PROSPECTIVE_CLUBS.map((prosp, idx) => (
+                  <div key={idx} className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-1.5">
+                    <div className="flex justify-between items-center">
+                      <span className="font-bold text-white text-xs sm:text-sm">{prosp.name}</span>
+                      <span className="text-[11px] font-bold text-cyan-400">{prosp.over15Rate} Over 1.5</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 block">{prosp.league} ({prosp.country}) • Média {prosp.avgGoals} gols/jogo</span>
+                    <p className="text-xs text-slate-300 leading-relaxed pt-1 border-t border-slate-800/60">
+                      {prosp.whyProspect}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Bloco 3: 5 Ações Práticas do Plano Estratégico */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                <Target className="w-4 h-4 text-emerald-400" />
+                Orientações Finais de Seleção para os Próximos Bilhetes
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {RAIO_X_STRATEGIC_PLAN.map((plan) => (
+                  <div key={plan.step} className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-indigo-600 text-white font-bold text-[10px] flex items-center justify-center">
+                        {plan.step}
+                      </span>
+                      <h5 className="font-bold text-white text-xs sm:text-sm">{plan.title}</h5>
+                    </div>
+                    <p className="text-xs text-slate-300">{plan.action}</p>
+                    <div className="text-[10px] text-indigo-400 font-semibold">
+                      Impacto estimado: {plan.impact}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 });
 
+RelatorioConfrontos.displayName = 'RelatorioConfrontos';
