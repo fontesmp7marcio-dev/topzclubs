@@ -142,17 +142,21 @@ export const normalizeTeamName = (name: string): string => {
 
   const clean = name
     .toLowerCase()
+    .replace(/ø/g, 'o')
+    .replace(/ł/g, 'l')
+    .replace(/đ/g, 'd')
     .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\./g, '')
     .trim();
 
   let res: string;
-  if (clean === 'barcelona sc' || clean === 'barcelona s.c.' || clean === 'barcelona guayaquil') {
+  if (clean === 'barcelona sc' || clean === 'barcelona sc ' || clean === 'barcelona guayaquil') {
     res = 'barcelona sc';
   } else if (clean === 'al-arabi' || clean === 'al arabi' || clean === 'al-arabi sc' || clean === 'al arabi sc') {
     res = 'al-arabi';
   } else {
     res = clean
-      .replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb)\b/gi, '')
+      .replace(/\b(fc|sc|cf|ac|as|sk|afc|vfl|vfb|rb|fk|kf|se|cd)\b/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -169,22 +173,40 @@ const KNOWN_FAV_ALIASES: Record<string, string[]> = {
   'sporting cp': ['sporting cp', 'sporting', 'sporting lisboa', 'sporting clube de portugal'],
   'sporting': ['sporting cp', 'sporting', 'sporting lisboa', 'sporting clube de portugal'],
   'atletico madrid': ['atletico de madrid', 'atletico madrid'],
-  'olympique marseille': ['marseille', 'olympique de marseille'],
+  'olympique marseille': ['marseille', 'olympique de marseille', 'olympique marseille'],
   'djurgardens if': ['djurgarden', 'djurgardens if'],
   'hjk helsinki': ['hjk', 'hjk helsinki'],
-  'bohemians': ['bohemian', 'bohemian fc', 'bohemians dublin'],
-  'inter miami': ['inter miami cf', 'inter miami'],
-  'inter milan': ['inter de milao', 'internazionale', 'inter milan'],
-  'al nassr': ['al nassr fc', 'al-nassr'],
-  'al hilal': ['al hilal saudi', 'al-hilal'],
-  'al ittihad': ['al-ittihad', 'al ittihad club'],
-  'al ahli': ['al-ahli', 'al ahli saudi'],
-  'al ahly': ['al ahly sc', 'al-ahly'],
-  'al arabi': ['al arabi', 'al-arabi', 'al arabi sc', 'al-arabi sc'],
-  'al-arabi': ['al arabi', 'al-arabi', 'al arabi sc', 'al-arabi sc'],
+  'bohemians': ['bohemian', 'bohemians', 'bohemians dublin'],
+  'inter miami': ['inter miami', 'inter miami cf'],
+  'inter milan': ['inter de milao', 'internazionale', 'inter milan', 'inter'],
+  'al nassr': ['al nassr', 'al-nassr'],
+  'al hilal': ['al hilal saudi', 'al-hilal', 'al hilal'],
+  'al ittihad': ['al-ittihad', 'al ittihad club', 'al ittihad'],
+  'al ahli': ['al-ahli', 'al ahli saudi', 'al ahli'],
+  'al ahly': ['al ahly', 'al-ahly'],
+  'al arabi': ['al arabi', 'al-arabi'],
+  'al-arabi': ['al arabi', 'al-arabi'],
   'barcelona sc': ['barcelona sc', 'barcelona guayaquil', 'barcelona'],
   'barcelona': ['barcelona sc', 'barcelona guayaquil', 'barcelona'],
   'nacional': ['club nacional de football', 'nacional de montevideo', 'nacional uru'],
+  'psv': ['psv', 'psv eindhoven'],
+  'copenhagen': ['copenhagen', 'kobenhavn'],
+  'club america': ['club america', 'america'],
+  'zenit': ['zenit', 'zenit st petersburg'],
+  'tottenham': ['tottenham', 'tottenham hotspur'],
+  'crvena zvezda': ['crvena zvezda', 'estrela vermelha'],
+  'paks': ['paks', 'paksi'],
+  'gyor': ['gyor', 'gyori eto'],
+  'penarol': ['penarol', 'club atletico penarol', 'atletico penarol'],
+  'jagiellonia': ['jagiellonia', 'jagiellonia bialystok'],
+  'bolivar': ['bolivar', 'club bolivar'],
+  'shkendija': ['shkendija'],
+  'vardar': ['vardar', 'vardar skopje'],
+  'rakow czestochowa': ['rakow czestochowa', 'rakow'],
+  'lech poznan': ['lech poznan', 'lech'],
+  'legia warszawa': ['legia warszawa', 'legia', 'legia varsovia'],
+  'manchester city': ['manchester city', 'man city'],
+  'manchester united': ['manchester united', 'man utd', 'man united'],
 };
 
 // Build a fast lookup Set for a given list of favorite clubs

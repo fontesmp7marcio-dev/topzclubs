@@ -1,7 +1,7 @@
 import webpush from 'web-push';
 import fs from 'fs';
 import path from 'path';
-import { supabaseAdmin, fetchSharedFavorites, fetchUserBets } from './supabase';
+import { supabaseAdmin, executeSupabaseWithRetry, fetchSharedFavorites, fetchUserBets } from './supabase';
 import { USER_FAVORITE_CLUBS_DATA } from '../src/data/favoriteClubs';
 import { scrapeFotMobMatchesByDate } from './fotmobScraper';
 import { getBrasiliaTodayStr } from '../src/utils/dateUtils';
@@ -105,13 +105,15 @@ export function getNotificationSettings(): NotificationSettings {
 export async function updateNotificationSettings(newSettings: Partial<NotificationSettings>): Promise<NotificationSettings> {
   currentSettings = { ...currentSettings, ...newSettings };
   try {
-    await supabaseAdmin
-      .from('notification_settings')
-      .upsert({
-        id: 1,
-        settings: currentSettings,
-        updated_at: new Date().toISOString(),
-      });
+    await executeSupabaseWithRetry(() =>
+      supabaseAdmin
+        .from('notification_settings')
+        .upsert({
+          id: 1,
+          settings: currentSettings,
+          updated_at: new Date().toISOString(),
+        })
+    );
   } catch (err) {
     console.warn('Could not save settings to Supabase, falling back to memory:', err);
   }
@@ -127,11 +129,13 @@ export function getNotificationLogs(): NotificationLog[] {
 export async function loadFromSupabase() {
   try {
     // 1. Load settings
-    const { data: settingsData, error: settingsError } = await supabaseAdmin
-      .from('notification_settings')
-      .select('settings')
-      .eq('id', 1)
-      .maybeSingle();
+    const { data: settingsData } = await executeSupabaseWithRetry(() =>
+      supabaseAdmin
+        .from('notification_settings')
+        .select('settings')
+        .eq('id', 1)
+        .maybeSingle()
+    );
 
     if (settingsData && settingsData.settings) {
       currentSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...settingsData.settings };
@@ -139,9 +143,11 @@ export async function loadFromSupabase() {
     }
 
     // 2. Load subscriptions
-    const { data: subData, error: subError } = await supabaseAdmin
-      .from('push_subscriptions')
-      .select('subscription_data');
+    const { data: subData } = await executeSupabaseWithRetry(() =>
+      supabaseAdmin
+        .from('push_subscriptions')
+        .select('subscription_data')
+    );
 
     if (subData && subData.length > 0) {
       const loadedSubs = subData.map((row: any) => row.subscription_data as webpush.PushSubscription);
@@ -169,13 +175,15 @@ export async function addSubscription(sub: webpush.PushSubscription) {
 
   // Attempt to store in Supabase table `push_subscriptions` if table exists
   try {
-    await supabaseAdmin
-      .from('push_subscriptions')
-      .upsert({
-        endpoint: sub.endpoint,
-        subscription_data: sub,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'endpoint' });
+    await executeSupabaseWithRetry(() =>
+      supabaseAdmin
+        .from('push_subscriptions')
+        .upsert({
+          endpoint: sub.endpoint,
+          subscription_data: sub,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'endpoint' })
+    );
   } catch (err) {
     // Graceful fallback to memory
   }
@@ -185,7 +193,9 @@ export async function addSubscription(sub: webpush.PushSubscription) {
 export async function removeSubscription(endpoint: string) {
   subscriptions = subscriptions.filter((s) => s.endpoint !== endpoint);
   try {
-    await supabaseAdmin.from('push_subscriptions').delete().eq('endpoint', endpoint);
+    await executeSupabaseWithRetry(() =>
+      supabaseAdmin.from('push_subscriptions').delete().eq('endpoint', endpoint)
+    );
   } catch (e) {
     // Ignore
   }

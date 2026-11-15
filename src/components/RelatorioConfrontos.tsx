@@ -32,8 +32,19 @@ import {
   SlidersHorizontal,
   Compass,
   BookOpen,
+  Home,
+  Plane,
+  ArrowLeftRight,
+  Swords,
+  Star,
+  Trophy,
 } from 'lucide-react';
 import { BetItem } from '../types';
+import {
+  USER_FAVORITE_CLUBS_DATA,
+  isTeamNameInFavorites,
+  normalizeTeamName,
+} from '../data/favoriteClubs';
 import {
   MASTER_RAIO_X_SUMMARY,
   MASTER_RAIO_X_TICKETS,
@@ -44,6 +55,7 @@ import {
   EXTERNAL_RESEARCH_LEAGUES,
   EXTERNAL_PROSPECTIVE_CLUBS,
   MasterTicket,
+  MasterLeg,
   MasterLeagueItem,
   MasterClubItem,
 } from '../data/raioXMasterData';
@@ -56,14 +68,58 @@ interface RelatorioConfrontosProps {
   teamRawMatches?: Record<string | number, any[]>;
 }
 
+interface FavoriteLegAppearance {
+  id: string;
+  ticketNumber: number;
+  ticketId: string;
+  ticketDate: string;
+  ticketTitle: string;
+  ticketOdd: number;
+  ticketStatus: 'Ganha' | 'Perdida' | 'Pendente';
+  mando: 'home' | 'away';
+  favoriteTeam: string;
+  opponentTeam: string;
+  isBothFavorites: boolean;
+  matchTitle: string;
+  team1: string;
+  team2: string;
+  score: string;
+  totalGoals: number;
+  status: 'green' | 'red' | 'pending';
+  league: string;
+  country: string;
+  marketLabel: string;
+  favoriteWonMatch: boolean | null;
+}
+
+function parseScoreString(scoreStr: string): { h: number; a: number } | null {
+  if (!scoreStr || scoreStr === '-') return null;
+  const parts = scoreStr.split(/\s*[-:x×]\s*/i);
+  if (parts.length !== 2) return null;
+  const h = parseInt(parts[0], 10);
+  const a = parseInt(parts[1], 10);
+  if (isNaN(h) || isNaN(a)) return null;
+  return { h, a };
+}
+
+function parseTeamsFromMatchTitle(matchTitle: string): { team1: string; team2: string } {
+  const parts = (matchTitle || '').split(/\s+x\s+|\s+vs\.?\s+|\s+-\s+/i);
+  if (parts.length >= 2) {
+    return { team1: parts[0].trim(), team2: parts.slice(1).join(' ').trim() };
+  }
+  return { team1: matchTitle.trim(), team2: '' };
+}
+
 export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = React.memo(({
   bets = [],
+  supabaseFavorites = [],
 }) => {
-  // 8 Seções Obrigatórias bem definidas
+  // 9 Seções bem definidas (incluindo Comparativo Casa vs Fora do Time Favorito)
   const [activeTab, setActiveTab] = useState<
     | 'visao-geral'
     | 'analise-greens'
     | 'analise-reds'
+    | 'casa-vs-fora'
     | 'ranking-ligas'
     | 'ranking-clubes'
     | 'clubes-recomendados'
@@ -72,10 +128,23 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = React.mem
   >('visao-geral');
 
   // Filtros da Visão Geral / Explorador Geral de Jogos
+  const [explorerMode, setExplorerMode] = useState<'tickets' | 'individual'>('tickets');
   const [ticketSearch, setTicketSearch] = useState<string>('');
   const [ticketStatusFilter, setTicketStatusFilter] = useState<'all' | 'Ganha' | 'Perdida' | 'Pendente'>('all');
-  const [ticketMonthFilter, setTicketMonthFilter] = useState<'all' | '2026-09' | '2026-10' | '2026-11'>('all');
+  const [ticketMonthFilter, setTicketMonthFilter] = useState<string>('all');
+  const [ticketMandoFilter, setTicketMandoFilter] = useState<'all' | 'home' | 'away' | 'both'>('all');
   const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
+
+  // Filtros da Análise dos REDS (com filtro de Mando do Favorito)
+  const [redMandoFilter, setRedMandoFilter] = useState<'all' | 'home' | 'away'>('all');
+
+  // Filtros da Seção Casa vs Fora (Time Favorito)
+  const [favMandoFilter, setFavMandoFilter] = useState<'all' | 'home' | 'away'>('all');
+  const [favResultFilter, setFavResultFilter] = useState<'all' | 'green' | 'red' | 'pending'>('all');
+  const [favMonthFilter, setFavMonthFilter] = useState<string>('all');
+  const [favSearch, setFavSearch] = useState<string>('');
+  const [excludeBothFavorites, setExcludeBothFavorites] = useState<boolean>(false);
+  const [favSubView, setFavSubView] = useState<'split' | 'matches' | 'clubs'>('split');
 
   // Filtros do Ranking de Ligas
   const [leagueSearch, setLeagueSearch] = useState<string>('');
@@ -88,7 +157,357 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = React.mem
   // Estado de feedback de cópia
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Resumo Geral (dinâmico com fallback na auditoria de 176 bilhetes)
+  // Lista ativa de clubes favoritos (Supabase em tempo real com fallback para lista padrão)
+  const activeFavorites = useMemo(() => {
+    if (supabaseFavorites && supabaseFavorites.length > 0) {
+      return supabaseFavorites;
+    }
+    return USER_FAVORITE_CLUBS_DATA;
+  }, [supabaseFavorites]);
+
+  // Base unificada de Bilhetes: 177 bilhetes auditados + atualizações/novos bilhetes do Balanço ao vivo
+  const unifiedTickets = useMemo<MasterTicket[]>(() => {
+    const ticketMap = new Map<string, MasterTicket>();
+    const keyMap = new Map<string, string>();
+
+    MASTER_RAIO_X_TICKETS.forEach((mt) => {
+      ticketMap.set(mt.id, mt);
+      const compKey = `${mt.date}_${mt.title.toLowerCase().trim()}`;
+      keyMap.set(compKey, mt.id);
+    });
+
+    if (bets && bets.length > 0) {
+      let nextNumber = MASTER_RAIO_X_TICKETS.length + 1;
+      bets.forEach((b) => {
+        if (!b || !b.id || b.status === 'Cancelada' || b.status === 'Reembolsada') return;
+        const compKey = `${b.date || ''}_${(b.title || '').toLowerCase().trim()}`;
+        const existingId = ticketMap.has(b.id) ? b.id : keyMap.get(compKey);
+        const existingTicket = existingId ? ticketMap.get(existingId) : undefined;
+
+        const mappedStatus: 'Ganha' | 'Perdida' | 'Pendente' =
+          b.status === 'Ganha' ? 'Ganha' : b.status === 'Perdida' ? 'Perdida' : 'Pendente';
+
+        const convertedLegs: MasterLeg[] =
+          b.legs && b.legs.length > 0
+            ? b.legs.map((leg, idx) => {
+                const existingLeg = existingTicket?.legs?.[idx];
+                const parsed = parseTeamsFromMatchTitle(leg.matchTitle);
+                const team1 = leg.team1 || parsed.team1 || existingLeg?.team1 || '';
+                const team2 = leg.team2 || parsed.team2 || existingLeg?.team2 || '';
+
+                const ft = leg.score?.ft || leg.settledScore;
+                const scoreStr =
+                  Array.isArray(ft) && ft.length === 2
+                    ? `${ft[0]}-${ft[1]}`
+                    : existingLeg?.score || '-';
+                const parsedScore = parseScoreString(scoreStr);
+                const totalGoals = parsedScore ? parsedScore.h + parsedScore.a : existingLeg?.totalGoals || 0;
+
+                const legStatus: 'green' | 'red' | 'pending' =
+                  leg.status === 'green'
+                    ? 'green'
+                    : leg.status === 'red'
+                    ? 'red'
+                    : existingLeg?.status || 'pending';
+
+                return {
+                  matchTitle: leg.matchTitle || `${team1} x ${team2}`,
+                  team1,
+                  team2,
+                  league: leg.leagueName || leg.league || leg.competition || existingLeg?.league || 'Competição',
+                  country: existingLeg?.country || 'Internacional',
+                  score: scoreStr,
+                  totalGoals,
+                  status: legStatus,
+                  market: leg.market || existingLeg?.market || 'OVER_1_5',
+                  marketLabel: leg.marketLabel || existingLeg?.marketLabel || 'Mais de 1.5 gols',
+                };
+              })
+            : existingTicket?.legs || [];
+
+        const greenCount = convertedLegs.filter((l) => l.status === 'green').length;
+        const redCount = convertedLegs.filter((l) => l.status === 'red').length;
+        const pendingCount = convertedLegs.filter((l) => l.status === 'pending').length;
+
+        if (existingTicket) {
+          ticketMap.set(existingTicket.id, {
+            ...existingTicket,
+            status: mappedStatus,
+            odd: b.odd || existingTicket.odd,
+            amount: b.amount ?? existingTicket.amount,
+            profit: b.profit ?? existingTicket.profit,
+            legs: convertedLegs,
+            totalLegsCount: convertedLegs.length,
+            greenLegsCount: greenCount,
+            redLegsCount: redCount,
+            pendingLegsCount: pendingCount,
+          });
+        } else if (convertedLegs.length > 0) {
+          ticketMap.set(b.id, {
+            ticketNumber: nextNumber++,
+            id: b.id,
+            date: b.date,
+            title: b.title,
+            odd: b.odd,
+            amount: b.amount,
+            profit: b.profit,
+            status: mappedStatus,
+            format: b.format,
+            totalLegsCount: convertedLegs.length,
+            greenLegsCount: greenCount,
+            redLegsCount: redCount,
+            pendingLegsCount: pendingCount,
+            legs: convertedLegs,
+          });
+        }
+      });
+    }
+
+    return Array.from(ticketMap.values()).sort((a, b) => {
+      const dateCmp = (b.date || '').localeCompare(a.date || '');
+      if (dateCmp !== 0) return dateCmp;
+      return a.ticketNumber - b.ticketNumber;
+    });
+  }, [bets]);
+
+  // Meses disponíveis dinamicamente nos bilhetes
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>();
+    unifiedTickets.forEach((t) => {
+      if (t.date && t.date.length >= 7) {
+        months.add(t.date.slice(0, 7));
+      }
+    });
+    return Array.from(months).sort((a, b) => b.localeCompare(a));
+  }, [unifiedTickets]);
+
+  // Análise completa de Time Favorito em Casa (Mandante) vs Fora de Casa (Visitante)
+  const homeAwayAnalysis = useMemo(() => {
+    const allAppearances: FavoriteLegAppearance[] = [];
+    let bothFavoritesLegsCount = 0;
+
+    unifiedTickets.forEach((ticket) => {
+      ticket.legs.forEach((leg, legIndex) => {
+        const isHomeFav = isTeamNameInFavorites(leg.team1, activeFavorites);
+        const isAwayFav = isTeamNameInFavorites(leg.team2, activeFavorites);
+        const isBoth = isHomeFav && isAwayFav;
+
+        if (isBoth) {
+          bothFavoritesLegsCount++;
+        }
+
+        if (excludeBothFavorites && isBoth) {
+          return;
+        }
+
+        const parsedScore = parseScoreString(leg.score);
+
+        if (isHomeFav) {
+          const favoriteWonMatch = parsedScore ? parsedScore.h > parsedScore.a : null;
+          allAppearances.push({
+            id: `${ticket.id}_leg_${legIndex}_home`,
+            ticketNumber: ticket.ticketNumber,
+            ticketId: ticket.id,
+            ticketDate: ticket.date,
+            ticketTitle: ticket.title,
+            ticketOdd: ticket.odd,
+            ticketStatus: ticket.status,
+            mando: 'home',
+            favoriteTeam: leg.team1,
+            opponentTeam: leg.team2,
+            isBothFavorites: isBoth,
+            matchTitle: leg.matchTitle,
+            team1: leg.team1,
+            team2: leg.team2,
+            score: leg.score,
+            totalGoals: leg.totalGoals,
+            status: leg.status,
+            league: leg.league,
+            country: leg.country,
+            marketLabel: leg.marketLabel,
+            favoriteWonMatch,
+          });
+        }
+
+        if (isAwayFav) {
+          const favoriteWonMatch = parsedScore ? parsedScore.a > parsedScore.h : null;
+          allAppearances.push({
+            id: `${ticket.id}_leg_${legIndex}_away`,
+            ticketNumber: ticket.ticketNumber,
+            ticketId: ticket.id,
+            ticketDate: ticket.date,
+            ticketTitle: ticket.title,
+            ticketOdd: ticket.odd,
+            ticketStatus: ticket.status,
+            mando: 'away',
+            favoriteTeam: leg.team2,
+            opponentTeam: leg.team1,
+            isBothFavorites: isBoth,
+            matchTitle: leg.matchTitle,
+            team1: leg.team1,
+            team2: leg.team2,
+            score: leg.score,
+            totalGoals: leg.totalGoals,
+            status: leg.status,
+            league: leg.league,
+            country: leg.country,
+            marketLabel: leg.marketLabel,
+            favoriteWonMatch,
+          });
+        }
+      });
+    });
+
+    // Filtra por mês para que os cards comparativos reflitam o mês selecionado quando escolhido
+    const monthScopedAppearances =
+      favMonthFilter === 'all'
+        ? allAppearances
+        : allAppearances.filter((a) => a.ticketDate.startsWith(favMonthFilter));
+
+    const computeStats = (items: FavoriteLegAppearance[]) => {
+      const total = items.length;
+      const greens = items.filter((i) => i.status === 'green').length;
+      const reds = items.filter((i) => i.status === 'red').length;
+      const pendings = items.filter((i) => i.status === 'pending').length;
+      const settled = greens + reds;
+      const winRate = settled > 0 ? Number(((greens / settled) * 100).toFixed(1)) : 0;
+      const redRate = settled > 0 ? Number(((reds / settled) * 100).toFixed(1)) : 0;
+      const finishedWithScore = items.filter((i) => parseScoreString(i.score) !== null && i.status !== 'pending');
+      const totalGoalsSum = finishedWithScore.reduce((acc, cur) => acc + cur.totalGoals, 0);
+      const avgGoals =
+        finishedWithScore.length > 0
+          ? Number((totalGoalsSum / finishedWithScore.length).toFixed(2))
+          : 0;
+      const teamWins = items.filter((i) => i.favoriteWonMatch === true && i.status !== 'pending').length;
+      const teamWinRate =
+        finishedWithScore.length > 0
+          ? Number(((teamWins / finishedWithScore.length) * 100).toFixed(1))
+          : 0;
+
+      return {
+        total,
+        greens,
+        reds,
+        pendings,
+        settled,
+        winRate,
+        redRate,
+        avgGoals,
+        teamWins,
+        teamWinRate,
+      };
+    };
+
+    const homeItems = monthScopedAppearances.filter((a) => a.mando === 'home');
+    const awayItems = monthScopedAppearances.filter((a) => a.mando === 'away');
+    const homeStats = computeStats(homeItems);
+    const awayStats = computeStats(awayItems);
+
+    // Lista filtrada pelos controles do usuário (sem filtro de mando para os painéis lado a lado)
+    const baseFiltered = monthScopedAppearances.filter((item) => {
+      if (favResultFilter !== 'all' && item.status !== favResultFilter) return false;
+      if (favSearch.trim()) {
+        const q = favSearch.toLowerCase();
+        const matchesQuery =
+          item.favoriteTeam.toLowerCase().includes(q) ||
+          item.opponentTeam.toLowerCase().includes(q) ||
+          item.matchTitle.toLowerCase().includes(q) ||
+          item.league.toLowerCase().includes(q) ||
+          item.country.toLowerCase().includes(q);
+        if (!matchesQuery) return false;
+      }
+      return true;
+    });
+
+    const filteredHomeList = baseFiltered.filter((item) => item.mando === 'home');
+    const filteredAwayList = baseFiltered.filter((item) => item.mando === 'away');
+    const filteredList =
+      favMandoFilter === 'all'
+        ? baseFiltered
+        : baseFiltered.filter((item) => item.mando === favMandoFilter);
+
+    // Ranking por clube favorito: Casa vs Fora
+    const clubMap = new Map<
+      string,
+      {
+        clubName: string;
+        country: string;
+        league: string;
+        homeTotal: number;
+        homeGreens: number;
+        homeReds: number;
+        awayTotal: number;
+        awayGreens: number;
+        awayReds: number;
+      }
+    >();
+
+    monthScopedAppearances.forEach((item) => {
+      const key = normalizeTeamName(item.favoriteTeam) || item.favoriteTeam.toLowerCase();
+      if (!clubMap.has(key)) {
+        clubMap.set(key, {
+          clubName: item.favoriteTeam,
+          country: item.country,
+          league: item.league,
+          homeTotal: 0,
+          homeGreens: 0,
+          homeReds: 0,
+          awayTotal: 0,
+          awayGreens: 0,
+          awayReds: 0,
+        });
+      }
+      const entry = clubMap.get(key)!;
+      if (item.mando === 'home') {
+        entry.homeTotal++;
+        if (item.status === 'green') entry.homeGreens++;
+        if (item.status === 'red') entry.homeReds++;
+      } else {
+        entry.awayTotal++;
+        if (item.status === 'green') entry.awayGreens++;
+        if (item.status === 'red') entry.awayReds++;
+      }
+    });
+
+    const clubRanking = Array.from(clubMap.values())
+      .filter((c) => {
+        if (!favSearch.trim()) return true;
+        const q = favSearch.toLowerCase();
+        return (
+          c.clubName.toLowerCase().includes(q) ||
+          c.country.toLowerCase().includes(q) ||
+          c.league.toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        const totalB = b.homeTotal + b.awayTotal;
+        const totalA = a.homeTotal + a.awayTotal;
+        if (totalB !== totalA) return totalB - totalA;
+        return b.homeGreens + b.awayGreens - (a.homeGreens + a.awayGreens);
+      });
+
+    return {
+      totalOccurrences: allAppearances.length,
+      monthScopedCount: monthScopedAppearances.length,
+      bothFavoritesLegsCount,
+      homeStats,
+      awayStats,
+      filteredHomeList,
+      filteredAwayList,
+      filteredList,
+      clubRanking,
+    };
+  }, [
+    unifiedTickets,
+    activeFavorites,
+    excludeBothFavorites,
+    favMonthFilter,
+    favMandoFilter,
+    favResultFilter,
+    favSearch,
+  ]);
+
+  // Resumo Geral (dinâmico com fallback na auditoria de 176+ bilhetes)
   const summary = useMemo(() => {
     if (bets && bets.length > 0) {
       const reds = bets.filter((b) => b.status === 'Perdida').length;
@@ -108,11 +527,22 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = React.mem
     return MASTER_RAIO_X_SUMMARY;
   }, [bets]);
 
-  // Lista dos 176 Bilhetes filtrados no Explorador
+  // Lista dos Bilhetes filtrados no Explorador (com filtro de Mando do Time Favorito)
   const filteredTickets = useMemo(() => {
-    return MASTER_RAIO_X_TICKETS.filter((ticket) => {
+    return unifiedTickets.filter((ticket) => {
       if (ticketStatusFilter !== 'all' && ticket.status !== ticketStatusFilter) return false;
       if (ticketMonthFilter !== 'all' && !ticket.date.startsWith(ticketMonthFilter)) return false;
+      if (ticketMandoFilter !== 'all') {
+        const hasMatch = ticket.legs.some((l) => {
+          const f1 = isTeamNameInFavorites(l.team1, activeFavorites);
+          const f2 = isTeamNameInFavorites(l.team2, activeFavorites);
+          if (ticketMandoFilter === 'home') return f1;
+          if (ticketMandoFilter === 'away') return f2;
+          if (ticketMandoFilter === 'both') return f1 && f2;
+          return true;
+        });
+        if (!hasMatch) return false;
+      }
       if (ticketSearch.trim()) {
         const q = ticketSearch.toLowerCase();
         const inTitle = ticket.title.toLowerCase().includes(q);
@@ -126,7 +556,20 @@ export const RelatorioConfrontos: React.FC<RelatorioConfrontosProps> = React.mem
       }
       return true;
     });
-  }, [ticketStatusFilter, ticketMonthFilter, ticketSearch]);
+  }, [unifiedTickets, ticketStatusFilter, ticketMonthFilter, ticketMandoFilter, ticketSearch, activeFavorites]);
+
+  // REDs detalhados filtrados por mando do favorito
+  const filteredDetailedReds = useMemo(() => {
+    if (redMandoFilter === 'all') return RAIO_X_DETAILED_REDS;
+    return RAIO_X_DETAILED_REDS.filter((r) =>
+      r.reasons.some((fail) => {
+        const { team1, team2 } = parseTeamsFromMatchTitle(fail.matchTitle);
+        if (redMandoFilter === 'home') return isTeamNameInFavorites(team1, activeFavorites);
+        if (redMandoFilter === 'away') return isTeamNameInFavorites(team2, activeFavorites);
+        return true;
+      })
+    );
+  }, [redMandoFilter, activeFavorites]);
 
   // Ligas filtradas
   const filteredLeagues = useMemo(() => {
@@ -179,6 +622,666 @@ Diagnóstico de Clubes:
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2500);
+  };
+
+  // Renderizador reutilizável da lista de jogos individuais desagrupados (com numeração de Greens e Reds)
+  const renderNumberedIndividualList = (items: FavoriteLegAppearance[], compact = false) => {
+    if (items.length === 0) {
+      return (
+        <div className="text-center py-8 text-slate-400 text-xs bg-slate-950/60 rounded-xl border border-slate-800/60">
+          Nenhuma partida individual encontrada com os filtros selecionados.
+        </div>
+      );
+    }
+
+    let greenCounter = 0;
+    let redCounter = 0;
+    let pendingCounter = 0;
+
+    return (
+      <div className="space-y-2 max-h-[560px] overflow-y-auto pr-1">
+        {items.map((item, idx) => {
+          const isGreen = item.status === 'green';
+          const isRed = item.status === 'red';
+          const statusNum = isGreen ? ++greenCounter : isRed ? ++redCounter : ++pendingCounter;
+
+          return (
+            <div
+              key={item.id}
+              className={`p-3 rounded-xl border transition flex items-start justify-between gap-2.5 ${
+                isGreen
+                  ? 'bg-emerald-950/15 border-emerald-800/35 hover:border-emerald-700/60'
+                  : isRed
+                  ? 'bg-rose-950/15 border-rose-800/35 hover:border-rose-700/60'
+                  : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-start gap-2.5 min-w-0">
+                {/* Número sequencial do jogo na lista */}
+                <span
+                  className={`w-7 h-7 rounded-lg text-[11px] font-black flex items-center justify-center shrink-0 mt-0.5 ${
+                    isGreen
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                      : isRed
+                      ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                  }`}
+                  title={`Jogo #${idx + 1} da lista`}
+                >
+                  #{idx + 1}
+                </span>
+
+                <div className="space-y-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span
+                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-extrabold uppercase ${
+                        item.mando === 'home'
+                          ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
+                          : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                      }`}
+                    >
+                      {item.mando === 'home' ? (
+                        <>
+                          <Home className="w-2.5 h-2.5" /> Casa
+                        </>
+                      ) : (
+                        <>
+                          <Plane className="w-2.5 h-2.5" /> Fora
+                        </>
+                      )}
+                    </span>
+
+                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                      <Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400" />
+                      {item.favoriteTeam}
+                    </span>
+
+                    {item.isBothFavorites && (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30 text-[10px] font-bold">
+                        <Swords className="w-2.5 h-2.5" /> Fav x Fav
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Placar e Confronto Individual */}
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold text-white">
+                    <span className={item.mando === 'home' ? 'text-indigo-300 underline decoration-indigo-500/50' : 'text-slate-200'}>
+                      {item.team1}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-800 text-white font-black text-[11px]">
+                      {item.score}
+                    </span>
+                    <span className={item.mando === 'away' ? 'text-cyan-300 underline decoration-cyan-500/50' : 'text-slate-200'}>
+                      {item.team2}
+                    </span>
+                  </div>
+
+                  {/* Metadados compactos + origem do bilhete */}
+                  <div className={`text-[10px] text-slate-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 ${compact ? 'leading-tight' : ''}`}>
+                    <span>{item.ticketDate.split('-').reverse().join('/')}</span>
+                    <span>•</span>
+                    <span>{item.league}</span>
+                    {!compact && <span>({item.country})</span>}
+                    <span>•</span>
+                    <span className="text-slate-500">Origem: Bilhete #{item.ticketNumber}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Badge com numeração específica de Green ou Red */}
+              <span
+                className={`px-2 py-1 rounded-lg text-[10px] font-black uppercase border shrink-0 whitespace-nowrap ${
+                  isGreen
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : isRed
+                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                    : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                }`}
+              >
+                {isGreen ? `🟢 GREEN #${statusNum}` : isRed ? `🔴 RED #${statusNum}` : `⏳ PEND #${statusNum}`}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // Bloco completo de Comparação Casa vs Fora + Listas Individuais Desagrupadas
+  const renderCasaVsForaBoard = () => {
+    const diff = Number((homeAwayAnalysis.homeStats.winRate - homeAwayAnalysis.awayStats.winRate).toFixed(1));
+    const homeWon = diff > 0;
+    const tie = diff === 0;
+
+    return (
+      <div className="space-y-5">
+        {/* Banner de Diagnóstico Direto */}
+        <div className="bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-900 p-4 sm:p-5 rounded-2xl border border-indigo-800/40 space-y-3">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-400 shrink-0">
+                <ArrowLeftRight className="w-6 h-6" />
+              </span>
+              <div>
+                <h3 className="text-base sm:text-xl font-bold text-white">
+                  Jogos Individuais Desagrupados: Time Favorito em Casa vs Fora de Casa
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-300 mt-0.5 max-w-3xl">
+                  Todos os jogos dos <strong>{unifiedTickets.length} bilhetes</strong> foram desagrupados em partidas individuais para você auditar exatamente quantos <strong>Greens</strong> e <strong>Reds</strong> os times favoritos tiveram jogando <strong>Em Casa</strong> vs <strong>Fora de Casa</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div
+              className={`px-3.5 py-2.5 rounded-xl border text-xs shrink-0 ${
+                tie
+                  ? 'bg-slate-800/80 border-slate-700 text-slate-200'
+                  : homeWon
+                  ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-300'
+                  : 'bg-cyan-950/40 border-cyan-700/50 text-cyan-300'
+              }`}
+            >
+              <span className="text-[10px] uppercase font-bold tracking-wider block opacity-80">
+                Melhor Assertividade
+              </span>
+              <span className="font-extrabold text-sm flex items-center gap-1.5 mt-0.5">
+                {tie ? (
+                  '⚖️ Empate Técnico'
+                ) : homeWon ? (
+                  <>
+                    <Home className="w-4 h-4 text-emerald-400" />
+                    Favorito em Casa (+{Math.abs(diff)}%)
+                  </>
+                ) : (
+                  <>
+                    <Plane className="w-4 h-4 text-cyan-400" />
+                    Favorito Fora (+{Math.abs(diff)}%)
+                  </>
+                )}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* DOIS COMPARATIVOS LADO A LADO: EM CASA vs FORA DE CASA */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Card 1: Time Favorito Jogando EM CASA */}
+          <div
+            className={`rounded-2xl border p-4 sm:p-5 space-y-4 transition ${
+              favMandoFilter === 'home' && favSubView === 'matches'
+                ? 'bg-indigo-950/30 border-indigo-500/70 shadow-lg shadow-indigo-950/40'
+                : 'bg-slate-900 border-slate-800 hover:border-indigo-700/50'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                  <Home className="w-5 h-5" />
+                </span>
+                <div>
+                  <h4 className="text-sm sm:text-base font-extrabold text-white">
+                    Time Favorito Jogando em Casa
+                  </h4>
+                  <span className="text-[11px] text-slate-400">
+                    {homeAwayAnalysis.homeStats.total} jogos individuais como mandante
+                  </span>
+                </div>
+              </div>
+              <span className="text-xl sm:text-2xl font-black text-emerald-400">
+                {homeAwayAnalysis.homeStats.winRate}%
+              </span>
+            </div>
+
+            <div className="grid grid-cols-4 gap-2 text-center">
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5">
+                <span className="text-[10px] text-slate-400 block">Jogos</span>
+                <span className="text-base sm:text-lg font-bold text-white">
+                  {homeAwayAnalysis.homeStats.total}
+                </span>
+              </div>
+              <div className="bg-emerald-950/30 border border-emerald-800/40 rounded-xl p-2.5">
+                <span className="text-[10px] text-emerald-400 font-semibold block">Greens</span>
+                <span className="text-base sm:text-lg font-extrabold text-emerald-400">
+                  {homeAwayAnalysis.homeStats.greens}
+                </span>
+              </div>
+              <div className="bg-rose-950/30 border border-rose-800/40 rounded-xl p-2.5">
+                <span className="text-[10px] text-rose-400 font-semibold block">Reds</span>
+                <span className="text-base sm:text-lg font-extrabold text-rose-400">
+                  {homeAwayAnalysis.homeStats.reds}
+                </span>
+              </div>
+              <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-2.5">
+                <span className="text-[10px] text-amber-400 font-semibold block">Pend.</span>
+                <span className="text-base sm:text-lg font-extrabold text-amber-400">
+                  {homeAwayAnalysis.homeStats.pendings}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-[11px] font-semibold">
+                <span className="text-emerald-400">
+                  🟢 {homeAwayAnalysis.homeStats.greens} Greens ({homeAwayAnalysis.homeStats.winRate}%)
+                </span>
+                <span className="text-rose-400">
+                  🔴 {homeAwayAnalysis.homeStats.reds} Reds ({homeAwayAnalysis.homeStats.redRate}%)
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
+                <div
+                  className="bg-emerald-500 h-full transition-all duration-300"
+                  style={{ width: `${homeAwayAnalysis.homeStats.winRate}%` }}
+                />
+                <div
+                  className="bg-rose-500 h-full transition-all duration-300"
+                  style={{ width: `${homeAwayAnalysis.homeStats.redRate}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs gap-2">
+              <div className="text-slate-400">
+                Média gols: <strong className="text-white">{homeAwayAnalysis.homeStats.avgGoals}</strong>/jogo • Vitórias:{' '}
+                <strong className="text-indigo-300">{homeAwayAnalysis.homeStats.teamWinRate}%</strong>
+              </div>
+              <button
+                onClick={() => {
+                  setFavSubView('matches');
+                  setFavMandoFilter(favMandoFilter === 'home' ? 'all' : 'home');
+                }}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition shrink-0 ${
+                  favSubView === 'matches' && favMandoFilter === 'home'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-800 text-indigo-300 hover:bg-slate-700'
+                }`}
+              >
+                {favSubView === 'matches' && favMandoFilter === 'home' ? '✓ Só Casa' : 'Focar Só Casa'}
+              </button>
+            </div>
+          </div>
+
+          {/* Card 2: Time Favorito Jogando FORA DE CASA */}
+          <div
+            className={`rounded-2xl border p-4 sm:p-5 space-y-4 transition ${
+              favMandoFilter === 'away' && favSubView === 'matches'
+                ? 'bg-cyan-950/30 border-cyan-500/70 shadow-lg shadow-cyan-950/40'
+                : 'bg-slate-900 border-slate-800 hover:border-cyan-700/50'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+                  <Plane className="w-5 h-5" />
+                </span>
+                <div>
+                  <h4 className="text-sm sm:text-base font-extrabold text-white">
+                    Time Favorito Jogando Fora de Casa
+                  </h4>
+                  <span className="text-[11px] text-slate-400">
+                    {homeAwayAnalysis.awayStats.total} jogos individuais como visitante
+                  </span>
+                </div>
+              </div>
+              <span className="text-xl sm:text-2xl font-black text-emerald-400">
+                {homeAwayAnalysis.awayStats.winRate}%
+              </span>
+            </div>
+
+            <div className="grid grid-cols-4 gap-2 text-center">
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-2.5">
+                <span className="text-[10px] text-slate-400 block">Jogos</span>
+                <span className="text-base sm:text-lg font-bold text-white">
+                  {homeAwayAnalysis.awayStats.total}
+                </span>
+              </div>
+              <div className="bg-emerald-950/30 border border-emerald-800/40 rounded-xl p-2.5">
+                <span className="text-[10px] text-emerald-400 font-semibold block">Greens</span>
+                <span className="text-base sm:text-lg font-extrabold text-emerald-400">
+                  {homeAwayAnalysis.awayStats.greens}
+                </span>
+              </div>
+              <div className="bg-rose-950/30 border border-rose-800/40 rounded-xl p-2.5">
+                <span className="text-[10px] text-rose-400 font-semibold block">Reds</span>
+                <span className="text-base sm:text-lg font-extrabold text-rose-400">
+                  {homeAwayAnalysis.awayStats.reds}
+                </span>
+              </div>
+              <div className="bg-amber-950/20 border border-amber-800/40 rounded-xl p-2.5">
+                <span className="text-[10px] text-amber-400 font-semibold block">Pend.</span>
+                <span className="text-base sm:text-lg font-extrabold text-amber-400">
+                  {homeAwayAnalysis.awayStats.pendings}
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-[11px] font-semibold">
+                <span className="text-emerald-400">
+                  🟢 {homeAwayAnalysis.awayStats.greens} Greens ({homeAwayAnalysis.awayStats.winRate}%)
+                </span>
+                <span className="text-rose-400">
+                  🔴 {homeAwayAnalysis.awayStats.reds} Reds ({homeAwayAnalysis.awayStats.redRate}%)
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden flex">
+                <div
+                  className="bg-emerald-500 h-full transition-all duration-300"
+                  style={{ width: `${homeAwayAnalysis.awayStats.winRate}%` }}
+                />
+                <div
+                  className="bg-rose-500 h-full transition-all duration-300"
+                  style={{ width: `${homeAwayAnalysis.awayStats.redRate}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-xs gap-2">
+              <div className="text-slate-400">
+                Média gols: <strong className="text-white">{homeAwayAnalysis.awayStats.avgGoals}</strong>/jogo • Vitórias:{' '}
+                <strong className="text-cyan-300">{homeAwayAnalysis.awayStats.teamWinRate}%</strong>
+              </div>
+              <button
+                onClick={() => {
+                  setFavSubView('matches');
+                  setFavMandoFilter(favMandoFilter === 'away' ? 'all' : 'away');
+                }}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition shrink-0 ${
+                  favSubView === 'matches' && favMandoFilter === 'away'
+                    ? 'bg-cyan-600 text-white'
+                    : 'bg-slate-800 text-cyan-300 hover:bg-slate-700'
+                }`}
+              >
+                {favSubView === 'matches' && favMandoFilter === 'away' ? '✓ Só Fora' : 'Focar Só Fora'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* BARRA DE FILTROS + LISTAS INDIVIDUAIS DESAGRUPADAS */}
+        <div className="bg-slate-900 rounded-2xl border border-slate-800 p-4 sm:p-5 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div>
+              <h4 className="text-base font-bold text-white flex items-center gap-2">
+                <ListFilter className="w-5 h-5 text-indigo-400" />
+                Auditoria Individual de Partidas (Bilhetes Desagrupados)
+              </h4>
+              <p className="text-xs text-slate-400">
+                Cada partida aparece separada e numerada com a contagem exata de Greens e Reds em Casa e Fora de Casa.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 self-start lg:self-auto">
+              <button
+                onClick={() => setFavSubView('split')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                  favSubView === 'split'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                ⚖️ Lado a Lado (Casa | Fora)
+              </button>
+              <button
+                onClick={() => setFavSubView('matches')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                  favSubView === 'matches'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                📋 Lista Única ({homeAwayAnalysis.filteredList.length})
+              </button>
+              <button
+                onClick={() => setFavSubView('clubs')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                  favSubView === 'clubs'
+                    ? 'bg-indigo-600 text-white shadow'
+                    : 'bg-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                🏆 Por Clube ({homeAwayAnalysis.clubRanking.length})
+              </button>
+            </div>
+          </div>
+
+          {/* Controles de Filtro */}
+          <div className={`grid grid-cols-1 sm:grid-cols-2 ${favSubView === 'matches' ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-3 pt-3 border-t border-slate-800`}>
+            {/* Mando (apenas na Lista Única, pois no Lado a Lado os dois já ficam visíveis) */}
+            {favSubView === 'matches' && (
+              <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+                {[
+                  { id: 'all', label: 'Todos' },
+                  { id: 'home', label: '🏠 Em Casa' },
+                  { id: 'away', label: '✈️ Fora' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setFavMandoFilter(opt.id as any)}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-bold transition ${
+                      favMandoFilter === opt.id
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Resultado */}
+            <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
+              {[
+                { id: 'all', label: 'Todos' },
+                { id: 'green', label: '🟢 Greens' },
+                { id: 'red', label: '🔴 Reds' },
+                { id: 'pending', label: '⏳' },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setFavResultFilter(opt.id as any)}
+                  className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-bold transition ${
+                    favResultFilter === opt.id
+                      ? opt.id === 'green'
+                        ? 'bg-emerald-600 text-white'
+                        : opt.id === 'red'
+                        ? 'bg-rose-600 text-white'
+                        : 'bg-indigo-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Mês */}
+            <div>
+              <select
+                value={favMonthFilter}
+                onChange={(e) => setFavMonthFilter(e.target.value)}
+                className="w-full h-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="all">Todos os Meses</option>
+                {availableMonths.map((m) => (
+                  <option key={m} value={m}>
+                    Mês {m.split('-').reverse().join('/')}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Busca */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                value={favSearch}
+                onChange={(e) => setFavSearch(e.target.value)}
+                placeholder="Buscar clube favorito, adversário ou liga..."
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+          </div>
+
+          {/* Opção Favorito x Favorito + Contagem Geral Filtrada */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs pt-1">
+            <label className="inline-flex items-center gap-2 text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={excludeBothFavorites}
+                onChange={(e) => setExcludeBothFavorites(e.target.checked)}
+                className="rounded border-slate-700 bg-slate-950 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>
+                Excluir confrontos <strong>Favorito x Favorito</strong> ({homeAwayAnalysis.bothFavoritesLegsCount} jogos onde os dois eram favoritos)
+              </span>
+            </label>
+
+            {favSubView === 'matches' && (
+              <div className="flex items-center gap-2 text-[11px] font-bold">
+                <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  🟢 {homeAwayAnalysis.filteredList.filter((i) => i.status === 'green').length} Greens
+                </span>
+                <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                  🔴 {homeAwayAnalysis.filteredList.filter((i) => i.status === 'red').length} Reds
+                </span>
+                <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                  ⏳ {homeAwayAnalysis.filteredList.filter((i) => i.status === 'pending').length} Pend.
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* SUBVIEW A: DUAS LISTAS LADO A LADO (CASA | FORA) */}
+          {favSubView === 'split' && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Coluna Esquerda: FAVORITO EM CASA */}
+              <div className="bg-slate-950/60 border border-indigo-900/50 rounded-2xl p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-indigo-500/20 text-indigo-300">
+                      <Home className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h5 className="text-xs sm:text-sm font-extrabold text-white">
+                        Favorito em Casa ({homeAwayAnalysis.filteredHomeList.length})
+                      </h5>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold">
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      🟢 {homeAwayAnalysis.filteredHomeList.filter((i) => i.status === 'green').length} Greens
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                      🔴 {homeAwayAnalysis.filteredHomeList.filter((i) => i.status === 'red').length} Reds
+                    </span>
+                  </div>
+                </div>
+                {renderNumberedIndividualList(homeAwayAnalysis.filteredHomeList, true)}
+              </div>
+
+              {/* Coluna Direita: FAVORITO FORA DE CASA */}
+              <div className="bg-slate-950/60 border border-cyan-900/50 rounded-2xl p-3.5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <span className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-300">
+                      <Plane className="w-4 h-4" />
+                    </span>
+                    <div>
+                      <h5 className="text-xs sm:text-sm font-extrabold text-white">
+                        Favorito Fora de Casa ({homeAwayAnalysis.filteredAwayList.length})
+                      </h5>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold">
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      🟢 {homeAwayAnalysis.filteredAwayList.filter((i) => i.status === 'green').length} Greens
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                      🔴 {homeAwayAnalysis.filteredAwayList.filter((i) => i.status === 'red').length} Reds
+                    </span>
+                  </div>
+                </div>
+                {renderNumberedIndividualList(homeAwayAnalysis.filteredAwayList, true)}
+              </div>
+            </div>
+          )}
+
+          {/* SUBVIEW B: LISTA ÚNICA NUMERADA */}
+          {favSubView === 'matches' && renderNumberedIndividualList(homeAwayAnalysis.filteredList, false)}
+
+          {/* SUBVIEW C: TABELA POR CLUBE FAVORITO (CASA vs FORA) */}
+          {favSubView === 'clubs' && (
+            <div className="overflow-x-auto max-h-[560px] overflow-y-auto rounded-xl border border-slate-800">
+              <table className="w-full text-xs text-left text-slate-300">
+                <thead className="bg-slate-950 text-slate-400 uppercase text-[10px] tracking-wider border-b border-slate-800 sticky top-0 z-10">
+                  <tr>
+                    <th className="p-3">Clube Favorito</th>
+                    <th className="p-3">País / Liga</th>
+                    <th className="p-3 text-center text-indigo-300">🏠 Em Casa (G / R)</th>
+                    <th className="p-3 text-center text-indigo-300">% Casa</th>
+                    <th className="p-3 text-center text-cyan-300">✈️ Fora (G / R)</th>
+                    <th className="p-3 text-center text-cyan-300">% Fora</th>
+                    <th className="p-3 text-center">Melhor Mando</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {homeAwayAnalysis.clubRanking.map((c, idx) => {
+                    const homeSettled = c.homeGreens + c.homeReds;
+                    const awaySettled = c.awayGreens + c.awayReds;
+                    const homePct = homeSettled > 0 ? Math.round((c.homeGreens / homeSettled) * 100) : null;
+                    const awayPct = awaySettled > 0 ? Math.round((c.awayGreens / awaySettled) * 100) : null;
+                    return (
+                      <tr key={idx} className="hover:bg-slate-800/40 transition">
+                        <td className="p-3 font-bold text-white">{c.clubName}</td>
+                        <td className="p-3 text-slate-400">{c.country} • {c.league}</td>
+                        <td className="p-3 text-center">
+                          <span className="text-emerald-400 font-bold">{c.homeGreens}G</span>
+                          <span className="text-slate-500 mx-1">/</span>
+                          <span className="text-rose-400 font-bold">{c.homeReds}R</span>
+                          <span className="text-[10px] text-slate-500 ml-1">({c.homeTotal})</span>
+                        </td>
+                        <td className="p-3 text-center font-bold text-indigo-300">
+                          {homePct !== null ? `${homePct}%` : '-'}
+                        </td>
+                        <td className="p-3 text-center">
+                          <span className="text-emerald-400 font-bold">{c.awayGreens}G</span>
+                          <span className="text-slate-500 mx-1">/</span>
+                          <span className="text-rose-400 font-bold">{c.awayReds}R</span>
+                          <span className="text-[10px] text-slate-500 ml-1">({c.awayTotal})</span>
+                        </td>
+                        <td className="p-3 text-center font-bold text-cyan-300">
+                          {awayPct !== null ? `${awayPct}%` : '-'}
+                        </td>
+                        <td className="p-3 text-center">
+                          {homePct === null && awayPct === null ? (
+                            <span className="text-slate-500">-</span>
+                          ) : homePct !== null && (awayPct === null || homePct > awayPct) ? (
+                            <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[10px] font-bold">
+                              🏠 Casa
+                            </span>
+                          ) : awayPct !== null && (homePct === null || awayPct > homePct) ? (
+                            <span className="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 text-[10px] font-bold">
+                              ✈️ Fora
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px] font-bold">
+                              ⚖️ Igual
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -281,17 +1384,18 @@ Diagnóstico de Clubes:
         </div>
       </div>
 
-      {/* 2. BARRA DE NAVEGAÇÃO ENTRE AS 8 SEÇÕES SOLICITADAS */}
+      {/* 2. BARRA DE NAVEGAÇÃO ENTRE AS SEÇÕES */}
       <div className="bg-slate-900 border-b border-slate-800 px-2 sm:px-6 overflow-x-auto scrollbar-none flex gap-1 sm:gap-2 py-2.5">
         {[
           { id: 'visao-geral', label: '1. Visão Geral', icon: BarChart3 },
           { id: 'analise-greens', label: '2. Análise dos GREENS', icon: ShieldCheck, badge: `${summary.totalGreens}` },
           { id: 'analise-reds', label: '3. Análise dos REDS', icon: ShieldAlert, badge: `${summary.totalReds}` },
-          { id: 'ranking-ligas', label: '4. Ranking de Ligas', icon: Globe, badge: '125' },
-          { id: 'ranking-clubes', label: '5. Ranking de Clubes', icon: Award, badge: '599' },
-          { id: 'clubes-recomendados', label: '6. Clubes Recomendados', icon: CheckCircle, badge: '139' },
-          { id: 'clubes-evitar', label: '7. Clubes para Evitar', icon: AlertTriangle, badge: '25' },
-          { id: 'recomendacoes-estrategicas', label: '8. Recomendações & Pesquisa', icon: Target },
+          { id: 'casa-vs-fora', label: '4. Casa vs Fora (Favorito)', icon: ArrowLeftRight, badge: `${homeAwayAnalysis.totalOccurrences}` },
+          { id: 'ranking-ligas', label: '5. Ranking de Ligas', icon: Globe, badge: '125' },
+          { id: 'ranking-clubes', label: '6. Ranking de Clubes', icon: Award, badge: '599' },
+          { id: 'clubes-recomendados', label: '7. Clubes Recomendados', icon: CheckCircle, badge: '139' },
+          { id: 'clubes-evitar', label: '8. Clubes para Evitar', icon: AlertTriangle, badge: '25' },
+          { id: 'recomendacoes-estrategicas', label: '9. Recomendações & Pesquisa', icon: Target },
         ].map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
@@ -421,65 +1525,126 @@ Diagnóstico de Clubes:
               </div>
             </div>
 
-            {/* Explorador de Todos os 176 Bilhetes / Jogos Registrados */}
+            {/* Explorador de Todos os Bilhetes / Jogos Individuais */}
             <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
                     <Compass className="w-5 h-5 text-indigo-400" />
-                    Varredura Completa dos 176 Bilhetes do Balanço
+                    Varredura Completa: Bilhetes vs Jogos Individuais (Casa vs Fora)
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Navegue e pesquise individualmente cada uma das apostas dos 3 meses com seus 3 jogos detalhados.
+                    Alterne entre os bilhetes agrupados ou desagrupe todas as partidas para auditar os jogos individuais do time favorito em casa e fora.
                   </p>
                 </div>
-                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 self-start sm:self-auto">
-                  Exibindo {filteredTickets.length} de {MASTER_RAIO_X_TICKETS.length} bilhetes
-                </span>
-              </div>
 
-              {/* Controles de Filtro do Explorador */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-800">
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    value={ticketSearch}
-                    onChange={(e) => setTicketSearch(e.target.value)}
-                    placeholder="Buscar time, liga ou país..."
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <select
-                    value={ticketStatusFilter}
-                    onChange={(e) => setTicketStatusFilter(e.target.value as any)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                {/* Alternância direta entre Bilhetes Agrupados e Jogos Individuais Desagrupados */}
+                <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
+                  <button
+                    onClick={() => setExplorerMode('tickets')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      explorerMode === 'tickets'
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
                   >
-                    <option value="all">Todos os Resultados (Greens, Reds e Pendentes)</option>
-                    <option value="Ganha">Apenas GREENS (Vencedores)</option>
-                    <option value="Perdida">Apenas REDS (Perdidos)</option>
-                    <option value="Pendente">Apenas Pendentes</option>
-                  </select>
-                </div>
-
-                <div>
-                  <select
-                    value={ticketMonthFilter}
-                    onChange={(e) => setTicketMonthFilter(e.target.value as any)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                    🎫 Por Bilhetes ({unifiedTickets.length})
+                  </button>
+                  <button
+                    onClick={() => setExplorerMode('individual')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                      explorerMode === 'individual'
+                        ? 'bg-emerald-600 text-white shadow'
+                        : 'bg-slate-800 text-emerald-300 border border-emerald-700/40 hover:bg-slate-700'
+                    }`}
                   >
-                    <option value="all">Todos os Meses</option>
-                    <option value="2026-11">Novembro / 2026</option>
-                    <option value="2026-10">Outubro / 2026</option>
-                    <option value="2026-09">Setembro / 2026</option>
-                  </select>
+                    ⚽ Jogos Individuais (Casa vs Fora: {homeAwayAnalysis.monthScopedCount})
+                  </button>
                 </div>
               </div>
 
-              {/* Lista dos Bilhetes */}
-              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+              {explorerMode === 'individual' ? (
+                renderCasaVsForaBoard()
+              ) : (
+                <>
+                  {/* Controles de Filtro do Explorador por Bilhetes */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-800">
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        value={ticketSearch}
+                        onChange={(e) => setTicketSearch(e.target.value)}
+                        placeholder="Buscar time, liga ou país..."
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+
+                    <div>
+                      <select
+                        value={ticketStatusFilter}
+                        onChange={(e) => setTicketStatusFilter(e.target.value as any)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="all">Todos os Resultados (Greens, Reds e Pendentes)</option>
+                        <option value="Ganha">Apenas GREENS (Vencedores)</option>
+                        <option value="Perdida">Apenas REDS (Perdidos)</option>
+                        <option value="Pendente">Apenas Pendentes</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <select
+                        value={ticketMandoFilter}
+                        onChange={(e) => setTicketMandoFilter(e.target.value as any)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="all">Mando do Favorito: Todos</option>
+                        <option value="home">🏠 Favorito Jogando em Casa</option>
+                        <option value="away">✈️ Favorito Jogando Fora de Casa</option>
+                        <option value="both">⚔️ Duelo Favorito x Favorito</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <select
+                        value={ticketMonthFilter}
+                        onChange={(e) => setTicketMonthFilter(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="all">Todos os Meses</option>
+                        {availableMonths.map((m) => (
+                          <option key={m} value={m}>
+                            {m.split('-').reverse().join('/')}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Atalho contextual para desagrupar imediatamente */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950/70 border border-slate-800 text-xs">
+                    <span className="text-slate-400">
+                      Exibindo <strong className="text-white">{filteredTickets.length}</strong> de {unifiedTickets.length} bilhetes agrupados.
+                    </span>
+                    <button
+                      onClick={() => {
+                        if (ticketMandoFilter === 'home' || ticketMandoFilter === 'away') {
+                          setFavMandoFilter(ticketMandoFilter);
+                          setFavSubView('matches');
+                        } else {
+                          setFavSubView('split');
+                        }
+                        setExplorerMode('individual');
+                      }}
+                      className="text-emerald-400 hover:text-emerald-300 font-bold text-left sm:text-right transition"
+                    >
+                      ⚽ Desagrupar bilhetes e listar jogos individuais (Casa vs Fora) →
+                    </button>
+                  </div>
+
+                  {/* Lista dos Bilhetes */}
+                  <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
                 {filteredTickets.map((t) => {
                   const isExpanded = expandedTicketId === t.id;
                   const isGreen = t.status === 'Ganha';
@@ -545,34 +1710,54 @@ Diagnóstico de Clubes:
                             Partidas Selecionadas no Bilhete:
                           </span>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                            {t.legs.map((leg, li) => (
-                              <div
-                                key={li}
-                                className={`p-2.5 rounded-lg border text-xs space-y-1 ${
-                                  leg.status === 'green'
-                                    ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-300'
-                                    : leg.status === 'red'
-                                    ? 'bg-rose-950/20 border-rose-800/40 text-rose-300'
-                                    : 'bg-slate-950 border-slate-800 text-slate-300'
-                                }`}
-                              >
-                                <div className="flex justify-between items-center font-bold">
-                                  <span className="line-clamp-1">{leg.matchTitle}</span>
-                                  <span className="text-[11px] font-black">{leg.score}</span>
+                            {t.legs.map((leg, li) => {
+                              const isFav1 = isTeamNameInFavorites(leg.team1, activeFavorites);
+                              const isFav2 = isTeamNameInFavorites(leg.team2, activeFavorites);
+                              return (
+                                <div
+                                  key={li}
+                                  className={`p-2.5 rounded-lg border text-xs space-y-1 ${
+                                    leg.status === 'green'
+                                      ? 'bg-emerald-950/20 border-emerald-800/40 text-emerald-300'
+                                      : leg.status === 'red'
+                                      ? 'bg-rose-950/20 border-rose-800/40 text-rose-300'
+                                      : 'bg-slate-950 border-slate-800 text-slate-300'
+                                  }`}
+                                >
+                                  <div className="flex justify-between items-center font-bold gap-2">
+                                    <span className="line-clamp-1">{leg.matchTitle}</span>
+                                    <span className="text-[11px] font-black shrink-0">{leg.score}</span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 flex justify-between">
+                                    <span>{leg.league}</span>
+                                    <span>{leg.country}</span>
+                                  </div>
+                                  {(isFav1 || isFav2) && (
+                                    <div className="flex flex-wrap gap-1 pt-0.5">
+                                      {isFav1 && (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                          🏠 Fav em Casa: {leg.team1}
+                                        </span>
+                                      )}
+                                      {isFav2 && (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                                          ✈️ Fav Fora: {leg.team2}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
-                                <div className="text-[10px] text-slate-400 flex justify-between">
-                                  <span>{leg.league}</span>
-                                  <span>{leg.country}</span>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       )}
                     </div>
                   );
                 })}
-              </div>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -711,14 +1896,37 @@ Diagnóstico de Clubes:
               </div>
             </div>
 
-            {/* Visualizador de Todos os 76 REDs com placar real */}
+            {/* Visualizador de Todos os 76 REDs com placar real + Filtro Casa vs Fora */}
             <div className="bg-slate-900 rounded-2xl border border-slate-800 p-5 space-y-3">
-              <h4 className="text-sm font-bold text-white flex items-center justify-between">
-                <span>Relação Detalhada dos 76 Bilhetes RED</span>
-                <span className="text-xs text-rose-400 font-medium">76 bilhetes catalogados</span>
-              </h4>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <span>Relação Detalhada dos Bilhetes RED</span>
+                  <span className="text-xs text-rose-400 font-medium">
+                    ({filteredDetailedReds.length} de {RAIO_X_DETAILED_REDS.length} bilhetes)
+                  </span>
+                </h4>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { id: 'all', label: 'Todos os REDs' },
+                    { id: 'home', label: '🏠 RED com Favorito em Casa' },
+                    { id: 'away', label: '✈️ RED com Favorito Fora' },
+                  ].map((btn) => (
+                    <button
+                      key={btn.id}
+                      onClick={() => setRedMandoFilter(btn.id as any)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
+                        redMandoFilter === btn.id
+                          ? 'bg-rose-600 text-white shadow-sm'
+                          : 'bg-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-                {RAIO_X_DETAILED_REDS.map((r) => (
+                {filteredDetailedReds.map((r) => (
                   <div key={r.id} className="bg-slate-950 p-3.5 rounded-xl border border-slate-800/80 space-y-2">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
                       <div className="flex items-center gap-2">
@@ -729,18 +1937,56 @@ Diagnóstico de Clubes:
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-800/60">
-                      {r.reasons.map((fail, fi) => (
-                        <div key={fi} className="p-2 rounded bg-rose-950/20 border border-rose-800/40 text-rose-300">
-                          <span className="font-bold block">❌ {fail.matchTitle} ({fail.score})</span>
-                          <span className="text-[10px] text-slate-400">{fail.league} • Motivo: {fail.categoryLabel}</span>
-                        </div>
-                      ))}
-                      {r.passedLegs.map((ok, oi) => (
-                        <div key={oi} className="p-2 rounded bg-emerald-950/20 border border-emerald-800/40 text-emerald-300">
-                          <span className="font-bold block">✓ {ok.matchTitle} ({ok.score})</span>
-                          <span className="text-[10px] text-slate-400">{ok.league}</span>
-                        </div>
-                      ))}
+                      {r.reasons.map((fail, fi) => {
+                        const { team1, team2 } = parseTeamsFromMatchTitle(fail.matchTitle);
+                        const isFav1 = isTeamNameInFavorites(team1, activeFavorites);
+                        const isFav2 = isTeamNameInFavorites(team2, activeFavorites);
+                        return (
+                          <div key={fi} className="p-2 rounded bg-rose-950/20 border border-rose-800/40 text-rose-300 space-y-0.5">
+                            <span className="font-bold block">❌ {fail.matchTitle} ({fail.score})</span>
+                            <span className="text-[10px] text-slate-400 block">{fail.league} • Motivo: {fail.categoryLabel}</span>
+                            {(isFav1 || isFav2) && (
+                              <div className="flex flex-wrap gap-1 pt-0.5">
+                                {isFav1 && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300">
+                                    🏠 Fav em Casa: {team1}
+                                  </span>
+                                )}
+                                {isFav2 && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300">
+                                    ✈️ Fav Fora: {team2}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {r.passedLegs.map((ok, oi) => {
+                        const { team1, team2 } = parseTeamsFromMatchTitle(ok.matchTitle);
+                        const isFav1 = isTeamNameInFavorites(team1, activeFavorites);
+                        const isFav2 = isTeamNameInFavorites(team2, activeFavorites);
+                        return (
+                          <div key={oi} className="p-2 rounded bg-emerald-950/20 border border-emerald-800/40 text-emerald-300 space-y-0.5">
+                            <span className="font-bold block">✓ {ok.matchTitle} ({ok.score})</span>
+                            <span className="text-[10px] text-slate-400 block">{ok.league}</span>
+                            {(isFav1 || isFav2) && (
+                              <div className="flex flex-wrap gap-1 pt-0.5">
+                                {isFav1 && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300">
+                                    🏠 Fav em Casa: {team1}
+                                  </span>
+                                )}
+                                {isFav2 && (
+                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300">
+                                    ✈️ Fav Fora: {team2}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -748,6 +1994,11 @@ Diagnóstico de Clubes:
             </div>
           </div>
         )}
+
+        {/* ======================================================== */}
+        {/* 4. COMPARATIVO: TIME FAVORITO EM CASA VS FORA DE CASA */}
+        {/* ======================================================== */}
+        {activeTab === 'casa-vs-fora' && renderCasaVsForaBoard()}
 
         {/* ======================================================== */}
         {/* 4. RANKING COMPLETO DE LIGAS (125 LIGAS NOMINAIS) */}
