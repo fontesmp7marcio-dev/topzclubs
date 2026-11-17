@@ -5,6 +5,11 @@ import { supabaseAdmin, executeSupabaseWithRetry, fetchSharedFavorites, fetchUse
 import { USER_FAVORITE_CLUBS_DATA } from '../src/data/favoriteClubs';
 import { scrapeFotMobMatchesByDate } from './fotmobScraper';
 import { getBrasiliaTodayStr } from '../src/utils/dateUtils';
+import {
+  loadAutoBetState,
+  runDailyAutoBetting,
+  syncPendingBetsInBackground,
+} from './autoBetting';
 
 // Types
 export interface NotificationSettings {
@@ -460,6 +465,24 @@ export async function checkMatchesAndBets() {
       }
     }
 
+    // 2.5 Run Daily Auto-Betting & Continuous GREEN/RED Settlement in Background
+    try {
+      await runDailyAutoBetting({ dateStr: todayStr });
+    } catch (autoErr) {
+      console.warn('[AutoBet Daemon] Error running daily auto-betting:', autoErr);
+    }
+
+    try {
+      const { settledBets } = await syncPendingBetsInBackground();
+      if (settledBets.length > 0 && currentSettings.notifyBets) {
+        for (const settled of settledBets) {
+          await handleBetResultNotification(settled);
+        }
+      }
+    } catch (syncErr) {
+      console.warn('[AutoBet Daemon] Error syncing pending bets:', syncErr);
+    }
+
     // 3. Process Active Bets in Balanço
     if (currentSettings.notifyBets) {
       try {
@@ -472,7 +495,15 @@ export async function checkMatchesAndBets() {
 
           // Check if legs are completed in today's match list or leg status
           for (const leg of legs) {
-            if (leg.status === 'Ganha' || leg.status === 'Perdida' || leg.status === 'Anulada') {
+            if (
+              leg.status === 'green' ||
+              leg.status === 'red' ||
+              leg.status === 'void' ||
+              leg.status === 'Ganha' ||
+              leg.status === 'Perdida' ||
+              leg.status === 'Anulada' ||
+              leg.matchStatus === 'finished'
+            ) {
               finishedLegsCount++;
             } else {
               // Check if corresponding match exists in today's scraped matches
@@ -561,10 +592,11 @@ export async function handleBetResultNotification(bet: any) {
 
 // Start background interval (runs every 60 seconds)
 export function startNotificationDaemon() {
-  console.log('[Push Notifications] Background monitor initialized.');
+  console.log('[Push Notifications & AutoBet] Background monitor initialized.');
   
   // Initial sync from Supabase
   loadFromSupabase().catch((err) => console.warn('Failed to load initially from Supabase:', err));
+  loadAutoBetState().catch((err) => console.warn('Failed to load AutoBet state from Supabase:', err));
 
   // Initial check after 10 seconds
   setTimeout(() => {

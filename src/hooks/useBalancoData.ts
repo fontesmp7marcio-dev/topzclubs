@@ -38,57 +38,69 @@ export function useBalancoData(
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const lastSyncRef = useRef<number>(0);
 
-  // Sync with Supabase on mount
+  const refreshBetsFromServer = async (triggerMatchSync = false) => {
+    try {
+      const [betsRes, bankrollRes] = await Promise.all([
+        fetch('/api/user-bets').then((r) => r.json()).catch(() => null),
+        fetch('/api/user-bankroll').then((r) => r.json()).catch(() => null),
+      ]);
+
+      if (betsRes && betsRes.success && Array.isArray(betsRes.bets)) {
+        const seenIds = new Set<string>();
+        const seenKeys = new Set<string>();
+        const uniqueBets: BetItem[] = [];
+
+        betsRes.bets.forEach((b: BetItem) => {
+          if (!b || !b.id || seenIds.has(b.id)) return;
+          seenIds.add(b.id);
+
+          const titleNorm = (b.title || '').toLowerCase().trim();
+          const compositeKey = `${b.date || ''}_${titleNorm}`;
+          if (compositeKey && seenKeys.has(compositeKey)) return;
+          if (compositeKey) seenKeys.add(compositeKey);
+
+          uniqueBets.push(b);
+        });
+
+        setBets(uniqueBets);
+        if (triggerMatchSync && uniqueBets.some((b: BetItem) => b.status === 'Pendente' || (b.legs && b.legs.length > 0))) {
+          setTimeout(() => {
+            handleSyncAllMatchResults(true, uniqueBets);
+          }, 1200);
+        }
+      }
+      if (bankrollRes && bankrollRes.success && typeof bankrollRes.initialCapital === 'number') {
+        setInitialCapital(bankrollRes.initialCapital);
+      }
+    } catch (e) {
+      console.warn('Error loading balance data from Supabase:', e);
+    }
+  };
+
+  // Sync with Supabase on mount + periodic background refresh for auto-generated tickets & GREEN/RED updates
   useEffect(() => {
     if (!enabled) return;
     let isMounted = true;
-    async function loadSupabaseData() {
-      try {
-        const [betsRes, bankrollRes] = await Promise.all([
-          fetch('/api/user-bets').then((r) => r.json()).catch(() => null),
-          fetch('/api/user-bankroll').then((r) => r.json()).catch(() => null),
-        ]);
 
-        if (!isMounted) return;
+    refreshBetsFromServer(true);
 
-        if (betsRes && betsRes.success && Array.isArray(betsRes.bets)) {
-          // Deduplicate bets by ID and unique match/title key to ensure each ticket and team appears only once
-          const seenIds = new Set<string>();
-          const seenKeys = new Set<string>();
-          const uniqueBets: BetItem[] = [];
-
-          betsRes.bets.forEach((b: BetItem) => {
-            if (!b || !b.id || seenIds.has(b.id)) return;
-            seenIds.add(b.id);
-
-            const titleNorm = (b.title || '').toLowerCase().trim();
-            const compositeKey = `${b.date || ''}_${titleNorm}`;
-            if (compositeKey && seenKeys.has(compositeKey)) return;
-            if (compositeKey) seenKeys.add(compositeKey);
-
-            uniqueBets.push(b);
-          });
-
-          setBets(uniqueBets);
-          if (uniqueBets.some((b: BetItem) => b.status === 'Pendente' || (b.legs && b.legs.length > 0))) {
-            setTimeout(() => {
-              if (isMounted) {
-                handleSyncAllMatchResults(true, uniqueBets);
-              }
-            }, 1500);
-          }
-        }
-        if (bankrollRes && bankrollRes.success && typeof bankrollRes.initialCapital === 'number') {
-          setInitialCapital(bankrollRes.initialCapital);
-        }
-      } catch (e) {
-        console.warn('Error loading balance data from Supabase:', e);
+    const interval = setInterval(() => {
+      if (isMounted && document.visibilityState === 'visible') {
+        refreshBetsFromServer(false);
       }
-    }
+    }, 60000);
 
-    loadSupabaseData();
+    const handleFocus = () => {
+      if (isMounted) {
+        refreshBetsFromServer(false);
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+
     return () => {
       isMounted = false;
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
     };
   }, [enabled]);
 
@@ -309,5 +321,6 @@ export function useBalancoData(
     handleSaveBet,
     handleDeleteBet,
     handleSaveBankroll,
+    refreshBetsFromServer,
   };
 }

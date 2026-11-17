@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { X, Calendar, Calculator, Plus, Edit2, Trash2, Check, Star, RefreshCw, Flame } from 'lucide-react';
+import { X, Calendar, Calculator, Plus, Edit2, Trash2, Check, Star, RefreshCw, Flame, Bot } from 'lucide-react';
 import {
+  AutoBetConfig,
   BetItem,
   BetStatus,
   BetFormat,
@@ -52,6 +53,8 @@ interface BetModalProps {
   filters?: MatchFilters;
   dateMatches?: Match[];
   selectedDate?: string;
+  autoBetConfig?: AutoBetConfig | null;
+  onOpenAutoBet?: () => void;
 }
 
 interface MatchSelectionRowProps {
@@ -376,6 +379,8 @@ export const BetModal: React.FC<BetModalProps> = ({
   filters,
   dateMatches,
   selectedDate,
+  autoBetConfig,
+  onOpenAutoBet,
 }) => {
   const isEditing = !!initialBet;
 
@@ -646,8 +651,7 @@ export const BetModal: React.FC<BetModalProps> = ({
     };
   }, [date, isOpen, dateMatches, selectedDate]);
 
-  // Helper to find a favorite club by name or ID
-  // Helper to find a favorite club by name, ID or aliases
+  // Helper to find a favorite club strictly by FotMob ID when available, or by name fallback
   const findFavoriteClub = React.useCallback(
     (teamName: string, teamId?: number) => {
       const list =
@@ -657,9 +661,8 @@ export const BetModal: React.FC<BetModalProps> = ({
           ? supabaseFavorites
           : USER_FAVORITE_CLUBS_DATA;
 
-      if (teamId) {
-        const byId = list.find((f) => Number(f.id) === Number(teamId));
-        if (byId) return byId;
+      if (teamId && Number(teamId) > 0) {
+        return list.find((f) => Number(f.id) === Number(teamId)) || null;
       }
       if (!teamName) return null;
       const dictId = getTeamId(teamName);
@@ -752,13 +755,13 @@ export const BetModal: React.FC<BetModalProps> = ({
     const teamsToFetch: { id: number; name: string }[] = [];
     allAvailableMatches.forEach((m) => {
       const fav1 = findFavoriteClub(m.team1, m.team1Id);
-      const isFav1 = !!fav1 || isTeamNameInFavorites(m.team1, activeFavList);
+      const isFav1 = !!fav1 || (!(m.team1Id && Number(m.team1Id) > 0) && isTeamNameInFavorites(m.team1, activeFavList));
       const name1 = fav1?.name || m.team1;
       const dictId1 = getTeamId(name1);
       const id1 = m.team1Id || fav1?.id || dictId1 || 0;
 
       const fav2 = findFavoriteClub(m.team2, m.team2Id);
-      const isFav2 = !!fav2 || isTeamNameInFavorites(m.team2, activeFavList);
+      const isFav2 = !!fav2 || (!(m.team2Id && Number(m.team2Id) > 0) && isTeamNameInFavorites(m.team2, activeFavList));
       const name2 = fav2?.name || m.team2;
       const dictId2 = getTeamId(name2);
       const id2 = m.team2Id || fav2?.id || dictId2 || 0;
@@ -802,7 +805,10 @@ export const BetModal: React.FC<BetModalProps> = ({
     }
   }, [isOpen, allAvailableMatches, findFavoriteClub, teamForms, combinedRawMatches, userFavorites, supabaseFavorites]);
 
-  // Evaluate each match: check if favorite teams have active fire emoji (🔥 Under 1.5) in their last match
+  const activeAutoMode = autoBetConfig?.enabled ? autoBetConfig.mode : null;
+
+  // Evaluate each match: check if favorite teams have active fire emoji (🔥 Under 1.5)
+  // When automation criteria ('home' | 'away') is configured, strictly enforce Home or Away favorites only.
   const matchesWithStreakInfo = React.useMemo(() => {
     if (!allAvailableMatches.length) return [];
     const activeFavList =
@@ -814,40 +820,50 @@ export const BetModal: React.FC<BetModalProps> = ({
 
     return allAvailableMatches.map((m) => {
       const fav1 = findFavoriteClub(m.team1, m.team1Id);
-      const isFav1 = !!fav1 || isTeamNameInFavorites(m.team1, activeFavList);
+      const rawIsFav1 = !!fav1 || (!(m.team1Id && Number(m.team1Id) > 0) && isTeamNameInFavorites(m.team1, activeFavList));
       const dictId1 = getTeamId(m.team1);
       const resolvedFav1Id = m.team1Id || fav1?.id || dictId1 || 0;
-      const emojis1 = isFav1 ? getTeamEmojis(fav1 ? fav1.name : m.team1, resolvedFav1Id) : [];
-      const streakFire1 = getEndingFireStreak(emojis1);
+      const emojis1 = rawIsFav1 ? getTeamEmojis(fav1 ? fav1.name : m.team1, resolvedFav1Id) : [];
+      const rawStreakFire1 = getEndingFireStreak(emojis1);
 
       const fav2 = findFavoriteClub(m.team2, m.team2Id);
-      const isFav2 = !!fav2 || isTeamNameInFavorites(m.team2, activeFavList);
+      const rawIsFav2 = !!fav2 || (!(m.team2Id && Number(m.team2Id) > 0) && isTeamNameInFavorites(m.team2, activeFavList));
       const dictId2 = getTeamId(m.team2);
       const resolvedFav2Id = m.team2Id || fav2?.id || dictId2 || 0;
-      const emojis2 = isFav2 ? getTeamEmojis(fav2 ? fav2.name : m.team2, resolvedFav2Id) : [];
-      const streakFire2 = getEndingFireStreak(emojis2);
+      const emojis2 = rawIsFav2 ? getTeamEmojis(fav2 ? fav2.name : m.team2, resolvedFav2Id) : [];
+      const rawStreakFire2 = getEndingFireStreak(emojis2);
 
-      // Rule: Match qualifies strictly if at least one favorite team has the "Foguinho" (On Fire) status
+      // Strictly enforce configured modality when activeAutoMode is 'home' or 'away'
+      const isFav1 = activeAutoMode === 'away' ? false : rawIsFav1;
+      const streakFire1 = activeAutoMode === 'away' ? 0 : rawStreakFire1;
+      const isFav2 = activeAutoMode === 'home' ? false : rawIsFav2;
+      const streakFire2 = activeAutoMode === 'home' ? 0 : rawStreakFire2;
+
       const fav1FireQualifies = isFav1 && streakFire1 >= 1;
       const fav2FireQualifies = isFav2 && streakFire2 >= 1;
-      const hasFireStreak = fav1FireQualifies || fav2FireQualifies;
+      const hasFireStreak =
+        activeAutoMode === 'home'
+          ? fav1FireQualifies
+          : activeAutoMode === 'away'
+          ? fav2FireQualifies
+          : fav1FireQualifies || fav2FireQualifies;
       const qualifies = hasFireStreak;
 
       return {
         match: m,
         isFav1,
-        fav1,
-        emojis1,
+        fav1: isFav1 ? fav1 : null,
+        emojis1: isFav1 ? emojis1 : [],
         streakFire1,
         isFav2,
-        fav2,
-        emojis2,
+        fav2: isFav2 ? fav2 : null,
+        emojis2: isFav2 ? emojis2 : [],
         streakFire2,
         hasFireStreak,
         qualifies,
       };
     });
-  }, [allAvailableMatches, findFavoriteClub, getTeamEmojis, userFavorites, supabaseFavorites]);
+  }, [allAvailableMatches, findFavoriteClub, getTeamEmojis, userFavorites, supabaseFavorites, activeAutoMode]);
 
   // Helper para normalizar e comparar datas (YYYY-MM-DD e DD/MM/YYYY)
   const areDatesSameDay = useCallback((d1?: string, d2?: string): boolean => {
@@ -1238,13 +1254,59 @@ export const BetModal: React.FC<BetModalProps> = ({
             </div>
           </div>
 
+          {/* AUTOMATION ENTRY INSIDE ADICIONAR APOSTA */}
+          {!isEditing && onOpenAutoBet && (
+            <div
+              onClick={onOpenAutoBet}
+              className={`px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
+                autoBetConfig?.enabled
+                  ? 'bg-emerald-950/30 border-emerald-500/40 hover:border-emerald-400/60'
+                  : 'bg-[#16161c] border-[#2a2a35] hover:border-zinc-600'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Bot
+                  className={`w-4 h-4 shrink-0 ${
+                    autoBetConfig?.enabled ? 'text-emerald-400' : 'text-zinc-400'
+                  }`}
+                />
+                <div className="flex items-center gap-2 flex-wrap min-w-0">
+                  <span className="text-xs font-black text-white uppercase tracking-tight">
+                    Montagem Automática Diária
+                  </span>
+                  <span
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
+                      autoBetConfig?.enabled
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                    }`}
+                  >
+                    {autoBetConfig?.enabled
+                      ? autoBetConfig.mode === 'home'
+                        ? 'Ativa • Só em Casa'
+                        : 'Ativa • Só Fora'
+                      : 'Desativada'}
+                  </span>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-lg bg-[#ccff00] text-black text-[10px] font-black uppercase tracking-wider shrink-0">
+                Configurar
+              </span>
+            </div>
+          )}
+
           {/* DYNAMIC SYNC SECTION: JOGOS DOS TIMES FAVORITOS COM FOGUINHO (UNDER 1.5) */}
           <div className="bg-[#151518] border border-[#26262e] rounded-xl p-3 sm:p-4 space-y-3">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 pb-1 border-b border-[#26262e]">
-              <div className="flex items-center gap-1.5 text-xs font-extrabold text-amber-400 uppercase tracking-wider">
+              <div className="flex items-center gap-2 flex-wrap text-xs font-extrabold text-amber-400 uppercase tracking-wider">
                 <span className="break-words">
                   Jogos dos Favoritos ({date.split('-').reverse().join('/')})
                 </span>
+                {activeAutoMode && (
+                  <span className="text-[10px] font-black text-[#ccff00] bg-[#ccff00]/10 border border-[#ccff00]/30 px-2 py-0.5 rounded-md normal-case">
+                    {activeAutoMode === 'home' ? 'Só em Casa' : 'Só Fora de Casa'}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 {/* Filtro Foguinho com seletor de quantidade de foguinhos */}
@@ -1345,6 +1407,10 @@ export const BetModal: React.FC<BetModalProps> = ({
                           : fireCountFilter === 2
                           ? 'Nenhum clube favorito com sequência de 2 foguinhos para esta data.'
                           : 'Nenhum clube favorito com sequência de 3+ foguinhos para esta data.'}
+                      </span>
+                    ) : activeAutoMode ? (
+                      <span>
+                        Nenhum favorito {activeAutoMode === 'home' ? 'jogando em casa' : 'jogando fora de casa'} encontrado para esta data.
                       </span>
                     ) : (
                       <span>Nenhum clube favorito com status Foguinho para esta data.</span>

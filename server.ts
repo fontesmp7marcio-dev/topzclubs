@@ -39,6 +39,13 @@ import {
   handleBetResultNotification,
   startNotificationDaemon
 } from './server/notifications';
+import {
+  getAutoBetConfig,
+  updateAutoBetConfig,
+  getAutoBetPreview,
+  runDailyAutoBetting,
+  syncPendingBetsInBackground,
+} from './server/autoBetting';
 import { getBrasiliaTodayStr } from './src/utils/dateUtils';
 
 const app = express();
@@ -156,6 +163,77 @@ app.post('/api/user-bankroll', async (req, res) => {
     }
     const success = await saveUserBankroll(initialCapital);
     res.json({ success });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Auto-Betting Daily Ticket Automation
+app.get('/api/auto-bet/config', async (req, res) => {
+  try {
+    const config = await getAutoBetConfig();
+    const dateStr = (req.query.date as string) || getBrasiliaTodayStr();
+    const modeOverride = req.query.mode === 'away' ? 'away' : req.query.mode === 'home' ? 'home' : undefined;
+    const preview = await getAutoBetPreview(
+      dateStr,
+      modeOverride ? { ...config, mode: modeOverride } : undefined
+    );
+    res.json({ success: true, config, preview });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/auto-bet/config', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const config = await updateAutoBetConfig(body);
+    let runResult: any = null;
+    if (config.enabled) {
+      const targetDate = typeof body.date === 'string' && body.date ? body.date : getBrasiliaTodayStr();
+      runResult = await runDailyAutoBetting({ dateStr: targetDate, manualTrigger: false });
+      const syncRes = await syncPendingBetsInBackground();
+      if (syncRes.settledBets.length > 0) {
+        for (const settled of syncRes.settledBets) {
+          handleBetResultNotification(settled).catch(() => {});
+        }
+      }
+    }
+    const updatedConfig = await getAutoBetConfig();
+    const preview = runResult?.preview || (await getAutoBetPreview(getBrasiliaTodayStr()));
+    res.json({
+      success: true,
+      config: updatedConfig,
+      createdBets: runResult?.createdBets || [],
+      skippedReason: runResult?.skippedReason,
+      preview,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post('/api/auto-bet/run-now', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const dateStr = typeof body.date === 'string' && body.date ? body.date : getBrasiliaTodayStr();
+    const runResult = await runDailyAutoBetting({ dateStr, manualTrigger: true });
+    const syncRes = await syncPendingBetsInBackground();
+    if (syncRes.settledBets.length > 0) {
+      for (const settled of syncRes.settledBets) {
+        handleBetResultNotification(settled).catch(() => {});
+      }
+    }
+    const config = await getAutoBetConfig();
+    res.json({
+      success: runResult.success,
+      config,
+      date: runResult.date,
+      createdBets: runResult.createdBets,
+      updatedBetsCount: syncRes.updatedCount,
+      skippedReason: runResult.skippedReason,
+      preview: runResult.preview,
+    });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

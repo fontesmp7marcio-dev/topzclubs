@@ -297,3 +297,46 @@ export interface BankrollStats {
   progression: number;
   initialCapital: number;
 }
+
+export type AutoBetMode = 'home' | 'away';
+
+export type AutoBetMarketOption =
+  | 'OVER_1_5'
+  | 'FAV_WIN'
+  | 'FAV_DC'
+  | 'HOME_WIN'
+  | 'AWAY_WIN'
+  | 'DC_1X'
+  | 'DC_X2';
+
+export interface AutoBetConfig {
+  enabled: boolean;
+  mode: AutoBetMode;
+  bookmaker: BetBookmaker;
+  market: AutoBetMarketOption;
+  stake: number;
+  defaultOdd: number;
+  maxGamesPerTicket: number;
+  updatedAt?: string;
+  lastRunDate?: string;
+  lastRunAt?: string;
+  lastCreatedCount?: number;
+}
+
+export interface AutoBetPreview {
+  date: string;
+  eligibleMatchesCount: number;
+  alreadyUsedCount: number;
+  plannedTicketsCount: number;
+  plannedBreakdown: number[]; // e.g. [3, 2] means 1 triple + 1 double
+  matches: Array<{
+    id: string;
+    team1: string;
+    team2: string;
+    time?: string;
+    leagueName?: string;
+    favoriteSide: 'home' | 'away';
+    alreadyInBet: boolean;
+  }>;
+}
+

@@ -19,9 +19,13 @@ import {
   EyeOff,
   ChevronLeft,
   ChevronRight,
+  Bot,
+  Home,
+  Plane,
 } from 'lucide-react';
-import { BetItem, BetStatus, Match, MatchFilters, MatchItem } from '../types';
+import { AutoBetConfig, BetItem, BetStatus, Match, MatchFilters, MatchItem } from '../types';
 import { BetModal } from './BetModal';
+import { AutoBetModal } from './AutoBetModal';
 import { MatchupPill } from './MatchupPill';
 import {
   calculateBankrollStats,
@@ -85,6 +89,8 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
     handleSaveBet,
     handleDeleteBet,
     handleSaveBankroll,
+    setNotification,
+    refreshBetsFromServer,
   } = balancoData;
 
   // UI States
@@ -100,6 +106,24 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
   const [editingBet, setEditingBet] = useState<BetItem | null>(null);
   const [isBankrollModalOpen, setIsBankrollModalOpen] = useState<boolean>(false);
   const [tempBankroll, setTempBankroll] = useState<string>('26,00');
+  const [isAutoBetModalOpen, setIsAutoBetModalOpen] = useState<boolean>(false);
+  const [autoBetConfig, setAutoBetConfig] = useState<AutoBetConfig | null>(null);
+
+  const loadAutoBetConfig = async () => {
+    try {
+      const res = await fetch('/api/auto-bet/config');
+      const data = await res.json();
+      if (data && data.success && data.config) {
+        setAutoBetConfig(data.config);
+      }
+    } catch {
+      // Ignore network error on config load
+    }
+  };
+
+  useEffect(() => {
+    loadAutoBetConfig();
+  }, []);
 
   // Close row popup menu when clicking outside
   useEffect(() => {
@@ -318,6 +342,30 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
             <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
           </button>
 
+          {/* Automação Diária de Bilhetes */}
+          <button
+            id="btn-open-autobet-modal"
+            onClick={() => setIsAutoBetModalOpen(true)}
+            className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer shadow-xs ${
+              autoBetConfig?.enabled
+                ? 'bg-emerald-950/50 hover:bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
+                : 'bg-[#18181c] hover:bg-[#22222a] border-[#2a2a32] hover:border-zinc-600 text-zinc-300 hover:text-white'
+            }`}
+            title="Configurar montagem automática diária de bilhetes"
+          >
+            <span
+              className={`w-2 h-2 rounded-full shrink-0 ${
+                autoBetConfig?.enabled ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'
+              }`}
+            />
+            <Bot className="w-3.5 h-3.5" />
+            <span>
+              {autoBetConfig?.enabled
+                ? `Auto: ${autoBetConfig.mode === 'home' ? 'Casa' : 'Fora'}`
+                : 'Automação'}
+            </span>
+          </button>
+
           {/* Adicionar Aposta Button */}
           <button
             id="btn-open-add-bet-modal"
@@ -332,6 +380,41 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
           </button>
         </div>
       </div>
+
+      {/* Active Automation Status Banner */}
+      {autoBetConfig?.enabled && (
+        <div className="bg-[#121a16] border border-emerald-500/30 rounded-xl px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 text-xs text-zinc-200 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-black uppercase tracking-wider">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Automação Ativa
+            </span>
+            <span className="flex items-center gap-1 font-semibold text-zinc-300">
+              {autoBetConfig.mode === 'home' ? (
+                <>
+                  <Home className="w-3.5 h-3.5 text-[#ccff00]" />
+                  <span>Favoritos jogando em casa</span>
+                </>
+              ) : (
+                <>
+                  <Plane className="w-3.5 h-3.5 text-[#ccff00]" />
+                  <span>Favoritos jogando fora de casa</span>
+                </>
+              )}
+            </span>
+            <span className="text-zinc-600 hidden sm:inline">•</span>
+            <span className="text-[11px] text-zinc-400">
+              Até 3 jogos/bilhete • Execução diária automática em segundo plano
+            </span>
+          </div>
+          <button
+            onClick={() => setIsAutoBetModalOpen(true)}
+            className="text-[11px] font-bold text-[#ccff00] hover:underline cursor-pointer self-start sm:self-center shrink-0"
+          >
+            Configurar
+          </button>
+        </div>
+      )}
 
       {/* 4 Stat Cards Row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
@@ -1034,6 +1117,25 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
           filters={filters}
           dateMatches={dateMatches}
           selectedDate={selectedDate}
+          autoBetConfig={autoBetConfig}
+          onOpenAutoBet={() => {
+            setIsAddModalOpen(false);
+            setEditingBet(null);
+            setIsAutoBetModalOpen(true);
+          }}
+        />
+      )}
+
+      {/* Auto-Betting Configuration Modal */}
+      {isAutoBetModalOpen && (
+        <AutoBetModal
+          isOpen={true}
+          initialConfig={autoBetConfig}
+          onClose={() => setIsAutoBetModalOpen(false)}
+          onUpdated={async (message) => {
+            await Promise.all([loadAutoBetConfig(), refreshBetsFromServer(true)]);
+            setNotification({ message, type: 'success' });
+          }}
         />
       )}
 
