@@ -148,12 +148,14 @@ export const AutoBetModal: React.FC<AutoBetModalProps> = ({
         const createdCount = Array.isArray(data.createdBets) ? data.createdBets.length : 0;
         const modeText = mode === 'home' ? 'Favoritos em Casa' : 'Favoritos Fora de Casa';
         let msg = enabled
-          ? `Automação salva (${modeText})!`
+          ? `Automação ativa (${modeText})!`
           : 'Automação diária desativada.';
         if (enabled && createdCount > 0) {
           msg = `${createdCount} ${
             createdCount === 1 ? 'bilhete montado' : 'bilhetes montados'
           } (${modeText}) e salvo no Balanço!`;
+        } else if (enabled && data.skippedReason) {
+          msg = `Automação salva (${modeText}): ${data.skippedReason}`;
         }
         onUpdated(msg);
         onClose();
@@ -165,7 +167,7 @@ export const AutoBetModal: React.FC<AutoBetModalProps> = ({
     }
   };
 
-  const modeLabel = mode === 'home' ? 'Somente favoritos em casa' : 'Somente favoritos fora de casa';
+  const modeLabel = mode === 'home' ? 'Em casa • Foguinho' : 'Fora de casa • Foguinho';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto select-none">
@@ -398,19 +400,26 @@ export const AutoBetModal: React.FC<AutoBetModalProps> = ({
                         </span>
                       </span>
                     </div>
-                    {m.alreadyInBet && (
-                      <span className="text-[9px] font-bold text-emerald-400 bg-emerald-950/50 border border-emerald-800/50 px-1.5 py-0.5 rounded shrink-0">
-                        Salvo
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {typeof m.fireStreak === 'number' && m.fireStreak >= 1 && (
+                        <span className="text-[9px] font-black text-amber-400 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.5 rounded">
+                          {m.fireStreak} 🔥
+                        </span>
+                      )}
+                      {m.alreadyInBet && (
+                        <span className="text-[9px] font-bold text-emerald-400 bg-emerald-950/50 border border-emerald-800/50 px-1.5 py-0.5 rounded">
+                          Salvo
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="text-[11px] text-zinc-400 py-2 text-center bg-[#1a1a20] rounded-lg border border-[#26262e]">
                 {isLoadingPreview
-                  ? 'Buscando jogos...'
-                  : `Nenhum jogo encontrado hoje (${mode === 'home' ? 'favoritos em casa' : 'favoritos fora'}).`}
+                  ? 'Buscando jogos no Método Foguinho...'
+                  : `Nenhum favorito no Método Foguinho hoje (${mode === 'home' ? 'em casa' : 'fora'}).`}
               </div>
             )}
           </div>

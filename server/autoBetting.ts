@@ -2,9 +2,11 @@ import fs from 'fs';
 import path from 'path';
 import {
   AutoBetConfig,
+  AutoBetMode,
   AutoBetPreview,
   BetItem,
   Match,
+  MatchItem,
 } from '../src/types';
 import {
   DEFAULT_AUTO_BET_CONFIG,
@@ -13,11 +15,13 @@ import {
   buildAutoBetPreview,
   chunkMatchesIntoTickets,
   getAutoBetCandidates,
+  isTeamFavorite,
 } from '../src/utils/autoBetBuilder';
 import { syncBetWithMatches } from '../src/utils/betSync';
 import { getBrasiliaTodayStr, addDaysToDateStr } from '../src/utils/dateUtils';
 import { USER_FAVORITE_CLUBS_DATA, normalizeTeamName } from '../src/data/favoriteClubs';
-import { scrapeFotMobMatchesByDate } from './fotmobScraper';
+import { getTeamId } from '../src/utils/teamCrests';
+import { scrapeFotMobMatchById, scrapeFotMobMatchesByDate, scrapeFotMobTeamFixtures } from './fotmobScraper';
 import {
   executeSupabaseWithRetry,
   fetchSharedFavorites,
@@ -27,6 +31,7 @@ import {
 } from './supabase';
 
 const AUTO_BET_STATE_FILE = path.join(process.cwd(), 'server', 'autoBetState.json');
+const FAVORITE_MATCHES_CACHE_FILE = path.join(process.cwd(), 'server', 'favoriteMatchesCache.json');
 const SUPABASE_SETTINGS_ROW_ID = 2; // Row 1 is notification_settings; Row 2 stores auto_bet_state
 
 interface PersistedAutoBetState {
@@ -42,7 +47,7 @@ let state: PersistedAutoBetState = {
 
 let stateLoaded = false;
 let activeRunPromise: Promise<AutoBetRunResult> | null = null;
-let activeSyncPromise: Promise<{ updatedCount: number; settledBets: BetItem[] }> | null = null;
+let activeSyncPromise: Promise<{ updatedCount: number; settledBets: BetItem[]; bets: BetItem[] }> | null = null;
 
 export interface AutoBetRunResult {
   success: boolean;
@@ -60,7 +65,7 @@ function sanitizeConfig(partial?: Partial<AutoBetConfig>): AutoBetConfig {
   };
 
   merged.enabled = Boolean(merged.enabled);
-  merged.mode = merged.mode === 'away' ? 'away' : 'home';
+  merged.mode = merged.mode === 'away' ? 'away' : merged.mode === 'all' ? 'all' : 'home';
   merged.bookmaker = merged.bookmaker === 'Bet365' ? 'Bet365' : 'Betano';
 
   const allowedMarkets = new Set([
@@ -82,8 +87,24 @@ function sanitizeConfig(partial?: Partial<AutoBetConfig>): AutoBetConfig {
   const parsedOdd = Number(merged.defaultOdd);
   merged.defaultOdd = !isNaN(parsedOdd) && parsedOdd >= 1.01 ? Number(parsedOdd.toFixed(2)) : 2.0;
 
-  // Strictly enforce max 3 games per ticket
-  merged.maxGamesPerTicket = 3;
+  const parsedMaxGames = Number(merged.maxGamesPerTicket);
+  merged.maxGamesPerTicket =
+    !isNaN(parsedMaxGames) && parsedMaxGames >= 1
+      ? Math.min(3, Math.max(1, Math.floor(parsedMaxGames)))
+      : 3;
+
+  const parsedFire = Number(merged.fireCountFilter);
+  merged.fireCountFilter =
+    !isNaN(parsedFire) && parsedFire >= 0 ? Math.min(3, Math.max(0, Math.floor(parsedFire))) : 0;
+
+  const parsedTicketCount =
+    merged.ticketCount === null || merged.ticketCount === undefined
+      ? null
+      : Number(merged.ticketCount);
+  merged.ticketCount =
+    parsedTicketCount !== null && !isNaN(parsedTicketCount) && parsedTicketCount > 0
+      ? Math.floor(parsedTicketCount)
+      : null;
 
   return merged;
 }
@@ -186,15 +207,13 @@ export async function updateAutoBetConfig(
   partial: Partial<AutoBetConfig>
 ): Promise<AutoBetConfig> {
   await loadAutoBetState();
-  const prevEnabled = state.config.enabled;
-  const prevMode = state.config.mode;
   const nextConfig = sanitizeConfig({
     ...partial,
     updatedAt: new Date().toISOString(),
   });
   state.config = nextConfig;
 
-  if ((!prevEnabled && nextConfig.enabled) || prevMode !== nextConfig.mode) {
+  if (nextConfig.enabled) {
     const todayKey = `${getBrasiliaTodayStr()}__${nextConfig.mode}`;
     if (state.generatedHistory && state.generatedHistory[todayKey]) {
       delete state.generatedHistory[todayKey];
@@ -218,6 +237,80 @@ async function getActiveFavoritesList(): Promise<FavoriteClubEntry[]> {
   return USER_FAVORITE_CLUBS_DATA;
 }
 
+let cachedDiskFavoriteMatches: Record<string | number, MatchItem[]> | null = null;
+function loadDiskFavoriteMatchesCache(): Record<string | number, MatchItem[]> {
+  if (cachedDiskFavoriteMatches) return cachedDiskFavoriteMatches;
+  try {
+    if (fs.existsSync(FAVORITE_MATCHES_CACHE_FILE)) {
+      cachedDiskFavoriteMatches = JSON.parse(
+        fs.readFileSync(FAVORITE_MATCHES_CACHE_FILE, 'utf-8')
+      );
+      return cachedDiskFavoriteMatches || {};
+    }
+  } catch {
+    // Ignore cache read error
+  }
+  cachedDiskFavoriteMatches = {};
+  return cachedDiskFavoriteMatches;
+}
+
+async function buildTeamRawMatchesForDate(
+  matches: Match[],
+  mode: AutoBetMode,
+  favoritesList: FavoriteClubEntry[]
+): Promise<Record<string | number, MatchItem[]>> {
+  const diskCache = loadDiskFavoriteMatchesCache();
+  const teamRawMatches: Record<string | number, MatchItem[]> = { ...diskCache };
+
+  const teamsToFetch = new Map<string, { id: number; name: string }>();
+  for (const m of matches || []) {
+    if (!m || !m.team1 || !m.team2) continue;
+    const isHomeFav = isTeamFavorite(m.team1, m.team1Id, favoritesList);
+    const isAwayFav = isTeamFavorite(m.team2, m.team2Id, favoritesList);
+
+    if ((mode === 'home' || mode === 'all') && isHomeFav) {
+      const id = m.team1Id || getTeamId(m.team1) || 0;
+      const key = `${id}_${normalizeTeamName(m.team1)}`;
+      if (!teamsToFetch.has(key)) teamsToFetch.set(key, { id, name: m.team1 });
+    }
+    if ((mode === 'away' || mode === 'all') && isAwayFav) {
+      const id = m.team2Id || getTeamId(m.team2) || 0;
+      const key = `${id}_${normalizeTeamName(m.team2)}`;
+      if (!teamsToFetch.has(key)) teamsToFetch.set(key, { id, name: m.team2 });
+    }
+  }
+
+  if (teamsToFetch.size > 0) {
+    await Promise.all(
+      Array.from(teamsToFetch.values()).map(async (t) => {
+        try {
+          const data = await scrapeFotMobTeamFixtures(t.id, 'team', false, t.name);
+          if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
+            if (t.id) {
+              teamRawMatches[t.id] = data.pastMatches;
+              teamRawMatches[String(t.id)] = data.pastMatches;
+            }
+            if (data.teamId) {
+              teamRawMatches[data.teamId] = data.pastMatches;
+              teamRawMatches[String(data.teamId)] = data.pastMatches;
+            }
+            const norm = normalizeTeamName(t.name);
+            if (norm) teamRawMatches[norm] = data.pastMatches;
+            if (data.teamName) {
+              const normData = normalizeTeamName(data.teamName);
+              if (normData) teamRawMatches[normData] = data.pastMatches;
+            }
+          }
+        } catch {
+          // Keep disk cache / fallback if live team fixture fetch fails
+        }
+      })
+    );
+  }
+
+  return teamRawMatches;
+}
+
 export async function getAutoBetPreview(
   dateStr = getBrasiliaTodayStr(),
   overrideConfig?: Partial<AutoBetConfig>
@@ -233,12 +326,20 @@ export async function getAutoBetPreview(
     fetchUserBets().catch(() => []),
   ]);
 
+  const safeMatches = Array.isArray(matches) ? matches : [];
+  const teamRawMatches = await buildTeamRawMatchesForDate(
+    safeMatches,
+    effectiveConfig.mode,
+    favoritesList
+  );
+
   return buildAutoBetPreview(
-    Array.isArray(matches) ? matches : [],
+    safeMatches,
     dateStr,
     effectiveConfig,
     favoritesList,
-    Array.isArray(existingBets) ? existingBets : []
+    Array.isArray(existingBets) ? existingBets : [],
+    teamRawMatches
   );
 }
 
@@ -278,7 +379,20 @@ export async function runDailyAutoBetting(options?: {
       };
     }
 
-    const preview = buildAutoBetPreview(matches, todayStr, config, favoritesList, existingBets);
+    const teamRawMatches = await buildTeamRawMatchesForDate(
+      matches,
+      config.mode,
+      favoritesList
+    );
+
+    const preview = buildAutoBetPreview(
+      matches,
+      todayStr,
+      config,
+      favoritesList,
+      existingBets,
+      teamRawMatches
+    );
 
     if (!config.enabled && !options?.manualTrigger) {
       return {
@@ -303,12 +417,19 @@ export async function runDailyAutoBetting(options?: {
       config.mode,
       favoritesList,
       existingBets,
-      blockedKeys
+      blockedKeys,
+      teamRawMatches,
+      config.fireCountFilter || 0
     );
 
-    const eligibleMatches = candidates
-      .filter((c) => !c.alreadyInBet)
-      .map((c) => c.match);
+    const eligibleCandidates = candidates.filter((c) => !c.alreadyInBet);
+    const eligibleMatches = eligibleCandidates.map((c) => c.match);
+    const favoriteSidesByMatchId: Record<string, 'home' | 'away'> = {};
+    eligibleCandidates.forEach((c) => {
+      if (c.match.id) {
+        favoriteSidesByMatchId[String(c.match.id)] = c.favoriteSide;
+      }
+    });
 
     if (eligibleMatches.length === 0) {
       state.config = {
@@ -326,15 +447,19 @@ export async function runDailyAutoBetting(options?: {
         createdBets: [],
         skippedReason:
           candidates.length > 0
-            ? 'Todos os jogos qualificados de hoje já possuem bilhete registrado.'
-            : 'Nenhum jogo válido encontrado na programação de hoje para o critério selecionado.',
+            ? 'Todos os jogos no Método Foguinho de hoje já possuem bilhete registrado.'
+            : 'Nenhum time favorito no Método Foguinho encontrado hoje para o critério selecionado.',
         preview,
       };
     }
 
-    // Group into tickets of max 3 games (prioritizing 3, remainder 2 or 1)
-    const chunks = chunkMatchesIntoTickets(eligibleMatches, 3);
-    const newBets = buildAutoBetItemsFromChunks(chunks, todayStr, config);
+    // Group into tickets of max `maxGamesPerTicket` (1..3), optionally capped by `ticketCount`
+    const chunks = chunkMatchesIntoTickets(
+      eligibleMatches,
+      config.maxGamesPerTicket || 3,
+      config.ticketCount
+    );
+    const newBets = buildAutoBetItemsFromChunks(chunks, todayStr, config, favoriteSidesByMatchId);
 
     const createdBets: BetItem[] = [];
     const newlyRecordedKeys = new Set<string>(state.generatedHistory[historyKey] || []);
@@ -386,7 +511,8 @@ export async function runDailyAutoBetting(options?: {
       todayStr,
       config,
       favoritesList,
-      [...existingBets, ...createdBets]
+      [...existingBets, ...createdBets],
+      teamRawMatches
     );
 
     return {
@@ -405,47 +531,58 @@ export async function runDailyAutoBetting(options?: {
 }
 
 /**
- * Background GREEN / RED settlement synchronizer.
- * Evaluates all pending bets in `user_bets` (both manual and auto-generated)
- * against official FotMob daily match feeds and persists status/score updates to Supabase.
+ * Background & On-Demand GREEN / RED / VOID settlement synchronizer.
+ * Evaluates all pending bets and unfinished-leg bets in `user_bets`
+ * against official FotMob daily feeds AND direct FotMob matchDetails API,
+ * and persists status/score updates to Supabase.
  */
-export async function syncPendingBetsInBackground(): Promise<{
+export async function syncPendingBetsInBackground(options?: {
+  forceRefresh?: boolean;
+}): Promise<{
   updatedCount: number;
   settledBets: BetItem[];
+  bets: BetItem[];
 }> {
-  if (activeSyncPromise) {
+  if (activeSyncPromise && !options?.forceRefresh) {
     return activeSyncPromise;
   }
 
-  activeSyncPromise = (async () => {
+  const runPromise = (async () => {
     const allBets = await fetchUserBets();
     if (!allBets || allBets.length === 0) {
-      return { updatedCount: 0, settledBets: [] };
+      return { updatedCount: 0, settledBets: [], bets: allBets || [] };
     }
 
     const todayStr = getBrasiliaTodayStr();
-    const minSyncDate = addDaysToDateStr(todayStr, -14);
+    const maxSyncDate = addDaysToDateStr(todayStr, 1);
 
-    // Collect bets that are still pending or have pending legs
+    // Collect bets that are pending, have pending legs, or have settled legs whose matchStatus is incomplete
     const betsToCheck = allBets.filter(
       (b) =>
         b.status === 'Pendente' ||
-        (Array.isArray(b.legs) && b.legs.some((l) => l.status === 'pending'))
+        (Array.isArray(b.legs) &&
+          b.legs.some(
+            (l) =>
+              l.status === 'pending' ||
+              (l.status !== 'void' &&
+                l.matchStatus !== 'finished' &&
+                l.matchStatus !== 'cancelled')
+          ))
     );
 
     if (betsToCheck.length === 0) {
-      return { updatedCount: 0, settledBets: [] };
+      return { updatedCount: 0, settledBets: [], bets: allBets };
     }
 
     const datesToFetch = new Set<string>();
     for (const bet of betsToCheck) {
-      if (bet.date && bet.date >= minSyncDate) {
+      if (bet.date && bet.date <= maxSyncDate) {
         datesToFetch.add(bet.date);
       }
       if (Array.isArray(bet.legs)) {
         for (const leg of bet.legs) {
           const d = leg.date || bet.date;
-          if (d && d >= minSyncDate) {
+          if (d && d <= maxSyncDate) {
             datesToFetch.add(d);
           }
         }
@@ -470,22 +607,123 @@ export async function syncPendingBetsInBackground(): Promise<{
       })
     );
 
-    if (allMatchesPool.length === 0) {
-      return { updatedCount: 0, settledBets: [] };
+    const terminalById = new Map<string, any>();
+    for (const m of allMatchesPool) {
+      if (m && m.id && (m.status === 'finished' || m.status === 'cancelled')) {
+        terminalById.set(String(m.id), m);
+      }
+    }
+
+    // Collect ALL pending/unfinished leg matchIds (regardless of bet.date, in case FotMob moved a match earlier or already completed it)
+    const matchIdsToQuery = new Map<string, { origDate: string; leg: any }>();
+    const legsNeedingTeamFallback: Array<{ team1?: string; team2?: string; team1Id?: number; team2Id?: number }> = [];
+
+    for (const bet of betsToCheck) {
+      if (!Array.isArray(bet.legs)) continue;
+      for (const leg of bet.legs) {
+        const legDate = leg.date || bet.date || '';
+
+        const mId = leg.matchId ? String(leg.matchId).trim() : leg.id ? String(leg.id).trim() : '';
+        const needsDetailLookup =
+          leg.status === 'pending' ||
+          (leg.status !== 'void' && leg.matchStatus !== 'finished' && leg.matchStatus !== 'cancelled');
+
+        if (!needsDetailLookup) continue;
+
+        if (/^\d+$/.test(mId)) {
+          if (!terminalById.has(mId) && !matchIdsToQuery.has(mId)) {
+            matchIdsToQuery.set(mId, { origDate: legDate, leg });
+          }
+        } else {
+          legsNeedingTeamFallback.push(leg);
+        }
+      }
+    }
+
+    // Query FotMob /api/data/matchDetails?matchId=... directly for authoritative status & score
+    const detailMatches: Match[] = [];
+    const missingDetailTeams: Array<{ id: number; name: string }> = [];
+    const matchIdEntries = Array.from(matchIdsToQuery.entries());
+    const batchSize = 8;
+
+    for (let i = 0; i < matchIdEntries.length; i += batchSize) {
+      const batch = matchIdEntries.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async ([mId, { origDate, leg }]) => {
+          const detail = await scrapeFotMobMatchById(mId, Boolean(options?.forceRefresh));
+          if (detail) {
+            // Check if match originally on past date was rescheduled >3 days ahead on FotMob
+            if (
+              detail.status === 'scheduled' &&
+              origDate &&
+              origDate <= todayStr &&
+              detail.date &&
+              detail.date > addDaysToDateStr(origDate, 3)
+            ) {
+              detailMatches.push({
+                ...detail,
+                status: 'postponed',
+                isVoided: true,
+              });
+            } else {
+              detailMatches.push(detail);
+            }
+          } else {
+            legsNeedingTeamFallback.push(leg);
+          }
+        })
+      );
+    }
+
+    if (detailMatches.length > 0) {
+      allMatchesPool.push(...detailMatches);
+    }
+
+    // Fallback: query team fixtures for any leg without numeric ID or missing matchDetails
+    const teamRawMatchesPool: Record<string | number, MatchItem[]> = {};
+    for (const leg of legsNeedingTeamFallback) {
+      const tId = leg.team1Id || (leg.team1 ? getTeamId(leg.team1) : 0) || leg.team2Id || (leg.team2 ? getTeamId(leg.team2) : 0) || 0;
+      const tName = leg.team1 || leg.team2 || '';
+      if (tId > 0 && !missingDetailTeams.some((t) => t.id === tId)) {
+        missingDetailTeams.push({ id: tId, name: tName });
+      }
+    }
+
+    if (missingDetailTeams.length > 0) {
+      await Promise.all(
+        missingDetailTeams.map(async (t) => {
+          try {
+            const data = await scrapeFotMobTeamFixtures(t.id, 'team', Boolean(options?.forceRefresh), t.name);
+            if (data && Array.isArray(data.pastMatches) && data.pastMatches.length > 0) {
+              teamRawMatchesPool[t.id] = data.pastMatches;
+              teamRawMatchesPool[String(t.id)] = data.pastMatches;
+              if (t.name) {
+                teamRawMatchesPool[normalizeTeamName(t.name)] = data.pastMatches;
+              }
+            }
+          } catch {
+            // Ignore team fallback failure
+          }
+        })
+      );
     }
 
     let updatedCount = 0;
     const settledBets: BetItem[] = [];
+    const updatedBetMap = new Map<string, BetItem>();
 
     for (const bet of betsToCheck) {
-      const { updatedBet, changed } = syncBetWithMatches(bet, allMatchesPool);
+      const { updatedBet, changed } = syncBetWithMatches(bet, allMatchesPool, teamRawMatchesPool);
       if (changed) {
         const saved = await saveUserBet(updatedBet);
         if (saved) {
           updatedCount++;
+          updatedBetMap.set(updatedBet.id, updatedBet);
           if (
             bet.status === 'Pendente' &&
-            (updatedBet.status === 'Ganha' || updatedBet.status === 'Perdida')
+            (updatedBet.status === 'Ganha' ||
+              updatedBet.status === 'Perdida' ||
+              updatedBet.status === 'Reembolsada')
           ) {
             settledBets.push(updatedBet);
           }
@@ -493,16 +731,24 @@ export async function syncPendingBetsInBackground(): Promise<{
       }
     }
 
+    const finalBets = allBets.map((b) => updatedBetMap.get(b.id) || b);
+
     if (updatedCount > 0) {
-      console.log(`[AutoBet Sync] Synchronized and persisted ${updatedCount} bet(s) in background.`);
+      console.log(`[AutoBet Sync] Synchronized and persisted ${updatedCount} bet(s) from FotMob.`);
     }
 
-    return { updatedCount, settledBets };
+    return { updatedCount, settledBets, bets: finalBets };
   })();
 
+  if (!options?.forceRefresh) {
+    activeSyncPromise = runPromise;
+  }
+
   try {
-    return await activeSyncPromise;
+    return await runPromise;
   } finally {
-    activeSyncPromise = null;
+    if (activeSyncPromise === runPromise) {
+      activeSyncPromise = null;
+    }
   }
 }

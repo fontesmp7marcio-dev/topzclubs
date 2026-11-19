@@ -13,11 +13,15 @@ export interface OfficialMatchResult {
   awayScore: number | undefined;
   scoreText: string | null; // e.g. "3 - 2"
   scoreObj: { ft: [number, number] } | null;
-  status: 'scheduled' | 'live' | 'finished' | 'postponed';
+  status: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled';
   isFinished: boolean;
   isLive: boolean;
   isPostponed?: boolean;
+  isCancelled?: boolean;
+  isVoided?: boolean;
   matchId?: string;
+  matchDate?: string;
+  matchTime?: string;
   source: 'direct' | 'dateMatches' | 'teamRaw' | 'none';
 }
 
@@ -92,11 +96,206 @@ export function matchTeams(t1A?: string, t2A?: string, t1B?: string, t2B?: strin
   return areTeamsMatching(t1A, t1B) && areTeamsMatching(t2A, t2B);
 }
 
+function normalizeBetSyncDate(d?: string): string {
+  if (!d) return '';
+  const s = String(d).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  if (s.includes('/')) {
+    const parts = s.split(' ')[0].split('/');
+    if (parts.length === 3) {
+      const [day, month, year] = parts;
+      const yr = year.length === 2 ? `20${year}` : year;
+      return `${yr}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+    }
+  }
+  return '';
+}
+
+function getDateDiffDays(d1?: string, d2?: string): number | null {
+  const n1 = normalizeBetSyncDate(d1);
+  const n2 = normalizeBetSyncDate(d2);
+  if (!n1 || !n2) return null;
+  const t1 = Date.parse(`${n1}T12:00:00Z`);
+  const t2 = Date.parse(`${n2}T12:00:00Z`);
+  if (isNaN(t1) || isNaN(t2)) return null;
+  return Math.abs(Math.round((t1 - t2) / 86400000));
+}
+
+interface MatchesIndex {
+  byId: Map<string, Match>;
+  byExactPair: Map<string, Match[]>;
+  list: Match[];
+}
+
+interface TeamRawIndex {
+  byId: Map<string, any>;
+  byExactPair: Map<string, any[]>;
+  allUnique: Array<{ raw: any; hNorm: string; aNorm: string; dateNorm: string }>;
+}
+
+const matchesIndexCache = new WeakMap<Match[], MatchesIndex>();
+const teamRawIndexCache = new WeakMap<Record<string | number, any[]>, TeamRawIndex>();
+
+function getMatchesIndex(matches: Match[]): MatchesIndex {
+  const cached = matchesIndexCache.get(matches);
+  if (cached) return cached;
+
+  const byId = new Map<string, Match>();
+  const byExactPair = new Map<string, Match[]>();
+
+  for (const m of matches) {
+    if (!m) continue;
+    if (m.id !== undefined && m.id !== null) {
+      const idStr = String(m.id);
+      const existing = byId.get(idStr);
+      // Prefer terminal / voided / live entries over scheduled ones if duplicates exist in pool
+      if (!existing || ((m as any).isVoided && !(existing as any).isVoided) || (m.status === 'finished' && existing.status !== 'finished') || (m.status === 'cancelled' && existing.status !== 'cancelled')) {
+        byId.set(idStr, m);
+      }
+    }
+    if (m.team1 && m.team2) {
+      const key = `${normalizeTeamForMatching(m.team1)}___${normalizeTeamForMatching(m.team2)}`;
+      const arr = byExactPair.get(key);
+      if (arr) arr.push(m);
+      else byExactPair.set(key, [m]);
+    }
+  }
+
+  const idx = { byId, byExactPair, list: matches };
+  matchesIndexCache.set(matches, idx);
+  return idx;
+}
+
+function getTeamRawIndex(teamRawMatches: Record<string | number, any[]>): TeamRawIndex {
+  const cached = teamRawIndexCache.get(teamRawMatches);
+  if (cached) return cached;
+
+  const byId = new Map<string, any>();
+  const byExactPair = new Map<string, any[]>();
+  const seenObjects = new Set<any>();
+  const allUnique: Array<{ raw: any; hNorm: string; aNorm: string; dateNorm: string }> = [];
+
+  for (const list of Object.values(teamRawMatches)) {
+    if (!Array.isArray(list)) continue;
+    for (const m of list) {
+      if (!m || seenObjects.has(m)) continue;
+      seenObjects.add(m);
+
+      const idStr = m.id !== undefined && m.id !== null ? String(m.id) : '';
+      if (idStr) {
+        const existing = byId.get(idStr);
+        if (!existing || (extractStatusFromMatch(m) === 'finished' && extractStatusFromMatch(existing) !== 'finished')) {
+          byId.set(idStr, m);
+        }
+      }
+
+      const mHome = m.homeTeam || m.home || m.team1 || '';
+      const mAway = m.awayTeam || m.away || m.team2 || '';
+      if (mHome && mAway) {
+        const hNorm = normalizeTeamForMatching(String(mHome));
+        const aNorm = normalizeTeamForMatching(String(mAway));
+        const dateNorm = normalizeBetSyncDate(m.date || m.utcTime);
+        const key = `${hNorm}___${aNorm}`;
+        const arr = byExactPair.get(key);
+        if (arr) arr.push(m);
+        else byExactPair.set(key, [m]);
+        allUnique.push({ raw: m, hNorm, aNorm, dateNorm });
+      }
+    }
+  }
+
+  const idx = { byId, byExactPair, allUnique };
+  teamRawIndexCache.set(teamRawMatches, idx);
+  return idx;
+}
+
+function pickBestCandidateByDate<T extends { date?: string; utcTime?: string }>(
+  candidates: T[],
+  targetDate?: string
+): T | undefined {
+  if (!candidates || candidates.length === 0) return undefined;
+  if (candidates.length === 1) {
+    const diff = getDateDiffDays(candidates[0].date || candidates[0].utcTime, targetDate);
+    if (diff === null || diff <= 2) return candidates[0];
+    return undefined;
+  }
+  const normTarget = normalizeBetSyncDate(targetDate);
+  if (!normTarget) return candidates[0];
+
+  let best: T | undefined;
+  let bestDiff = Infinity;
+  for (const c of candidates) {
+    const diff = getDateDiffDays(c.date || c.utcTime, normTarget);
+    if (diff === null) {
+      if (!best) best = c;
+      continue;
+    }
+    if (diff <= 2 && diff < bestDiff) {
+      bestDiff = diff;
+      best = c;
+    }
+  }
+  return best;
+}
+
+function findRawMatchForLeg(
+  leg: { id?: string | number; matchId?: string | number; team1?: string; team2?: string; date?: string },
+  teamRawMatches?: Record<string | number, any[]>
+): any | undefined {
+  if (!teamRawMatches) return undefined;
+  const idx = getTeamRawIndex(teamRawMatches);
+  const targetId = leg.matchId ? String(leg.matchId) : leg.id ? String(leg.id) : '';
+  if (targetId) {
+    const direct = idx.byId.get(targetId);
+    if (direct) return direct;
+  }
+  if (leg.team1 && leg.team2) {
+    const hNorm = normalizeTeamForMatching(leg.team1);
+    const aNorm = normalizeTeamForMatching(leg.team2);
+    const exact = idx.byExactPair.get(`${hNorm}___${aNorm}`);
+    if (exact && exact.length > 0) {
+      const picked = pickBestCandidateByDate(exact, leg.date);
+      if (picked) return picked;
+    }
+    const candidates: any[] = [];
+    for (const item of idx.allUnique) {
+      const hMatch = item.hNorm === hNorm || (item.hNorm.length >= 4 && hNorm.length >= 4 && (item.hNorm.includes(hNorm) || hNorm.includes(item.hNorm)));
+      if (!hMatch) continue;
+      const aMatch = item.aNorm === aNorm || (item.aNorm.length >= 4 && aNorm.length >= 4 && (item.aNorm.includes(aNorm) || aNorm.includes(item.aNorm)));
+      if (aMatch) candidates.push(item.raw);
+    }
+    if (candidates.length > 0) {
+      return pickBestCandidateByDate(candidates, leg.date);
+    }
+  }
+  return undefined;
+}
+
 /**
  * Extracts numeric scores [homeScore, awayScore] from any match object shape.
+ * Guards against synthetic 0-0 scores on scheduled/postponed/cancelled matches.
  */
 export function extractScoreFromMatch(m: any): { homeScore?: number; awayScore?: number } {
   if (!m) return {};
+
+  const rawMatchStatus = String(m.matchStatus || (typeof m.status === 'string' ? m.status : m.status?.reason?.short) || '')
+    .toLowerCase()
+    .trim();
+  if (
+    rawMatchStatus === 'scheduled' ||
+    rawMatchStatus === 'notstarted' ||
+    rawMatchStatus === 'ns' ||
+    rawMatchStatus === 'cancelled' ||
+    rawMatchStatus === 'canceled' ||
+    rawMatchStatus === 'canc' ||
+    rawMatchStatus === 'can' ||
+    rawMatchStatus === 'postponed' ||
+    rawMatchStatus === 'postp' ||
+    rawMatchStatus === 'adia' ||
+    rawMatchStatus === 'adiado'
+  ) {
+    return {};
+  }
 
   if (m.score) {
     if (Array.isArray(m.score.ft) && typeof m.score.ft[0] === 'number' && typeof m.score.ft[1] === 'number') {
@@ -142,18 +341,30 @@ export function extractScoreFromMatch(m: any): { homeScore?: number; awayScore?:
 }
 
 /**
- * Normalizes match status across all formats into 'scheduled' | 'live' | 'finished' | 'postponed'
+ * Normalizes match status across all formats into 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled'
  */
-export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished' | 'postponed' {
+export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled' {
   if (!m) return 'scheduled';
-  const s = String(m.status?.reason?.short || m.status || m.matchStatus || '').toLowerCase().trim();
+  const s = String(m.status?.reason?.short || (typeof m.status === 'string' ? m.status : '') || m.matchStatus || '')
+    .toLowerCase()
+    .trim();
+
+  if (
+    s === 'cancelled' ||
+    s === 'canceled' ||
+    s === 'canc' ||
+    s === 'can' ||
+    s === 'aband' ||
+    s === 'abandoned' ||
+    m.cancelled === true ||
+    m.status?.cancelled === true
+  ) {
+    return 'cancelled';
+  }
 
   if (
     s === 'postponed' ||
-    s === 'cancelled' ||
-    s === 'canceled' ||
     s === 'adiado' ||
-    s === 'canc' ||
     s === 'postp' ||
     s === 'adia' ||
     s === 'susp' ||
@@ -172,6 +383,7 @@ export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished
     s === 'concluído' ||
     s === 'pen' ||
     s === 'aet' ||
+    m.status?.finished === true ||
     m.isFinished === true ||
     m.result === 'V' ||
     m.result === 'E' ||
@@ -189,7 +401,8 @@ export function extractStatusFromMatch(m: any): 'scheduled' | 'live' | 'finished
     s === '2t' ||
     s === 'intervalo' ||
     s === 'started' ||
-    s === 'in_progress'
+    s === 'in_progress' ||
+    (m.status?.started === true && !m.status?.finished)
   ) {
     return 'live';
   }
@@ -221,46 +434,78 @@ export function resolveOfficialMatchResult(
 ): OfficialMatchResult {
   const targetId = target.matchId ? String(target.matchId) : target.id ? String(target.id) : '';
 
-  // 1. Check in matches list (FotMob daily feed)
-  let matchFound = targetId ? matches.find((m) => String(m.id) === targetId) : undefined;
-  if (!matchFound && target.team1 && target.team2) {
-    matchFound = matches.find((m) => matchTeams(m.team1, m.team2, target.team1, target.team2));
+  // Fast path when no external feeds are provided
+  if (matches.length === 0 && !teamRawMatches) {
+    const status = extractStatusFromMatch(target);
+    const targetScores = extractScoreFromMatch(target);
+    const hasScore =
+      typeof targetScores.homeScore === 'number' && typeof targetScores.awayScore === 'number';
+    return {
+      homeScore: targetScores.homeScore,
+      awayScore: targetScores.awayScore,
+      scoreText: hasScore ? `${targetScores.homeScore} - ${targetScores.awayScore}` : null,
+      scoreObj: hasScore ? { ft: [targetScores.homeScore!, targetScores.awayScore!] } : null,
+      status,
+      isFinished: status === 'finished',
+      isLive: status === 'live',
+      isPostponed: status === 'postponed',
+      isCancelled: status === 'cancelled',
+      isVoided: false,
+      matchId: targetId || undefined,
+      source: 'none',
+    };
+  }
+
+  // 1. Check in matches list (FotMob daily feed & direct matchDetails entries)
+  let matchFound: Match | undefined;
+  if (matches.length > 0) {
+    const idx = getMatchesIndex(matches);
+    if (targetId) {
+      matchFound = idx.byId.get(targetId);
+    }
+    if (!matchFound && target.team1 && target.team2) {
+      const key = `${normalizeTeamForMatching(target.team1)}___${normalizeTeamForMatching(target.team2)}`;
+      const exactList = idx.byExactPair.get(key);
+      if (exactList && exactList.length > 0) {
+        matchFound = pickBestCandidateByDate(exactList, target.date);
+      }
+      if (!matchFound) {
+        const fuzzyCandidates = idx.list.filter((m) =>
+          matchTeams(m.team1, m.team2, target.team1, target.team2)
+        );
+        if (fuzzyCandidates.length > 0) {
+          matchFound = pickBestCandidateByDate(fuzzyCandidates, target.date);
+        }
+      }
+    }
   }
 
   // 2. Check in teamRawMatches (FotMob past finished fixtures)
-  let rawMatchFound: any = undefined;
-  if (teamRawMatches) {
-    const allRaw = Object.values(teamRawMatches).flat();
-    if (targetId) {
-      rawMatchFound = allRaw.find((m) => m && String(m.id) === targetId);
-    }
-    if (!rawMatchFound && target.team1 && target.team2) {
-      rawMatchFound = allRaw.find((m) => {
-        if (!m) return false;
-        const mHome = m.homeTeam || m.home || m.team1;
-        const mAway = m.awayTeam || m.away || m.team2;
-        return matchTeams(mHome, mAway, target.team1, target.team2);
-      });
-    }
-  }
+  const rawMatchFound = findRawMatchForLeg(target, teamRawMatches);
 
   let homeScore: number | undefined;
   let awayScore: number | undefined;
-  let status: 'scheduled' | 'live' | 'finished' | 'postponed' = 'scheduled';
+  let status: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled' = 'scheduled';
 
-  // Check candidate from FotMob matches list (authoritative for date)
+  // Check candidate from FotMob matches list (authoritative for date/matchDetails)
   if (matchFound) {
+    status = extractStatusFromMatch(matchFound);
     const scores = extractScoreFromMatch(matchFound);
     homeScore = scores.homeScore;
     awayScore = scores.awayScore;
-    status = extractStatusFromMatch(matchFound);
   }
 
-  // Check candidate from teamRawMatches (for past verified results if not in current day matches or if rawMatch has definitive verified finished status)
+  // Check candidate from teamRawMatches (for past verified results if not in matches or if rawMatch has definitive verified finished status)
   if (rawMatchFound) {
-    const rawScores = extractScoreFromMatch(rawMatchFound);
     const rawStatus = extractStatusFromMatch(rawMatchFound);
-    if (rawStatus === 'finished' && rawScores.homeScore !== undefined && rawScores.awayScore !== undefined) {
+    const rawScores = extractScoreFromMatch(rawMatchFound);
+    if (
+      rawStatus === 'finished' &&
+      rawScores.homeScore !== undefined &&
+      rawScores.awayScore !== undefined &&
+      !(matchFound as any)?.isVoided &&
+      status !== 'cancelled'
+    ) {
       homeScore = rawScores.homeScore;
       awayScore = rawScores.awayScore;
       status = 'finished';
@@ -275,27 +520,40 @@ export function resolveOfficialMatchResult(
 
   // Only if neither matchFound nor rawMatchFound was found in FotMob data, check target's existing fields
   if (!matchFound && !rawMatchFound) {
+    status = extractStatusFromMatch(target);
     const targetScores = extractScoreFromMatch(target);
     homeScore = targetScores.homeScore;
     awayScore = targetScores.awayScore;
-    status = extractStatusFromMatch(target);
   }
 
   const isFinished = status === 'finished';
   const isLive = status === 'live';
   const isPostponed = status === 'postponed';
-  const hasScore = typeof homeScore === 'number' && typeof awayScore === 'number';
+  const isCancelled = status === 'cancelled';
+  const isVoided = Boolean((matchFound as any)?.isVoided) || isCancelled;
+  const hasScore =
+    (isFinished || isLive) && typeof homeScore === 'number' && typeof awayScore === 'number';
+
+  const resolvedMatchDate =
+    normalizeBetSyncDate(matchFound?.date || rawMatchFound?.date || rawMatchFound?.utcTime) || undefined;
+  const resolvedMatchTime =
+    (typeof matchFound?.time === 'string' && /^\d{1,2}:\d{2}/.test(matchFound.time) ? matchFound.time.slice(0, 5) : undefined) ||
+    (typeof rawMatchFound?.time === 'string' && /^\d{1,2}:\d{2}/.test(rawMatchFound.time) ? rawMatchFound.time.slice(0, 5) : undefined);
 
   return {
-    homeScore,
-    awayScore,
+    homeScore: hasScore ? homeScore : undefined,
+    awayScore: hasScore ? awayScore : undefined,
     scoreText: hasScore ? `${homeScore} - ${awayScore}` : null,
     scoreObj: hasScore ? { ft: [homeScore!, awayScore!] } : null,
     status,
     isFinished,
     isLive,
     isPostponed,
+    isCancelled,
+    isVoided,
     matchId: matchFound ? String(matchFound.id) : rawMatchFound ? String(rawMatchFound.id) : (targetId || undefined),
+    matchDate: resolvedMatchDate,
+    matchTime: resolvedMatchTime,
     source: matchFound ? (rawMatchFound ? 'direct' : 'dateMatches') : (rawMatchFound ? 'teamRaw' : 'none'),
   };
 }
@@ -384,8 +642,15 @@ export function evaluateLegResult(
   market: string | undefined,
   homeScore: number | null | undefined,
   awayScore: number | null | undefined,
-  matchStatus: 'scheduled' | 'live' | 'finished' | string | undefined
+  matchStatus: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled' | string | undefined
 ): BetLegStatus {
+  const normStatus = String(matchStatus || '').toLowerCase().trim();
+  if (normStatus === 'cancelled' || normStatus === 'canceled' || normStatus === 'canc' || normStatus === 'can' || normStatus === 'void') {
+    return 'void';
+  }
+  if (normStatus === 'scheduled' || normStatus === 'postponed') {
+    return 'pending';
+  }
   if (!market) return 'pending';
   if (homeScore === null || homeScore === undefined || awayScore === null || awayScore === undefined) {
     return 'pending';
@@ -394,7 +659,7 @@ export function evaluateLegResult(
   const h = Number(homeScore);
   const a = Number(awayScore);
   const total = h + a;
-  const isFinished = matchStatus === 'finished';
+  const isFinished = normStatus === 'finished';
 
   switch (market) {
     // 1X2
@@ -698,8 +963,28 @@ export function syncBetWithMatches(
     const awayScore = official.awayScore;
     const matchStatus = official.status;
     const legMarket = leg.market || 'OVER_1_5';
-    const newLegStatus = evaluateLegResult(legMarket, homeScore, awayScore, matchStatus);
-    const scoreObj = official.scoreObj || leg.score || null;
+
+    let newLegStatus: BetLegStatus;
+    if (official.isVoided) {
+      newLegStatus = 'void';
+    } else if (leg.status === 'void' && (matchStatus === 'postponed' || official.source === 'none')) {
+      newLegStatus = 'void';
+    } else if (
+      official.source === 'none' &&
+      (leg.status === 'green' || leg.status === 'red') &&
+      matchStatus === 'scheduled'
+    ) {
+      // Preserve manually settled legs when no live FotMob override was returned
+      newLegStatus = leg.status;
+    } else {
+      newLegStatus = evaluateLegResult(legMarket, homeScore, awayScore, matchStatus);
+    }
+
+    const isScheduledOrVoid =
+      matchStatus === 'scheduled' || matchStatus === 'cancelled' || matchStatus === 'postponed';
+    const scoreObj = isScheduledOrVoid
+      ? null
+      : official.scoreObj || (leg.matchStatus !== 'scheduled' ? leg.score : null) || null;
     const isFinished = matchStatus === 'finished';
     const settledScore: [number, number] | null =
       isFinished && homeScore !== undefined && awayScore !== undefined
@@ -709,6 +994,8 @@ export function syncBetWithMatches(
         : null;
 
     const resolvedMatchId = official.matchId || leg.matchId || leg.id;
+    const resolvedLegDate = official.matchDate || leg.date;
+    const resolvedLegTime = official.matchTime || leg.time;
 
     if (
       newLegStatus !== leg.status ||
@@ -716,12 +1003,16 @@ export function syncBetWithMatches(
       legMarket !== leg.market ||
       JSON.stringify(scoreObj) !== JSON.stringify(leg.score) ||
       JSON.stringify(settledScore) !== JSON.stringify(leg.settledScore) ||
-      (resolvedMatchId && resolvedMatchId !== leg.matchId)
+      (resolvedMatchId && resolvedMatchId !== leg.matchId) ||
+      (resolvedLegDate && resolvedLegDate !== leg.date) ||
+      (resolvedLegTime && resolvedLegTime !== leg.time)
     ) {
       anyLegChanged = true;
       return {
         ...leg,
         matchId: resolvedMatchId,
+        date: resolvedLegDate,
+        time: resolvedLegTime,
         market: legMarket,
         status: newLegStatus,
         score: scoreObj,
@@ -792,28 +1083,30 @@ export function isLegCompleted(
     return false;
   }
 
-  // 3. If explicitly scheduled / not started or postponed / cancelled, it is NOT completed
+  // 3. Cancelled or voided legs count as resolved/completed
   if (
-    ms === 'scheduled' ||
-    ms === 'notstarted' ||
-    ms === 'ns' ||
-    ms === 'fixture' ||
-    ms === 'agendado' ||
-    ms === 'programado' ||
-    ms === 'a iniciar' ||
-    ms === 'postponed' ||
+    leg.status === 'void' ||
     ms === 'cancelled' ||
     ms === 'canceled' ||
-    ms === 'adiado' ||
     ms === 'canc' ||
+    ms === 'can' ||
+    ms === 'aband'
+  ) {
+    return true;
+  }
+
+  // 4. If explicitly scheduled / not started or postponed, it is NOT completed (unless already graded green/red with real score below)
+  if (
+    ms === 'postponed' ||
     ms === 'postp' ||
     ms === 'adia' ||
+    ms === 'adiado' ||
     ms === 'susp'
   ) {
     return false;
   }
 
-  // 4. If explicitly finished, it IS completed
+  // 5. If explicitly finished, it IS completed
   if (
     ms === 'finished' ||
     ms === 'ft' ||
@@ -828,26 +1121,14 @@ export function isLegCompleted(
     return true;
   }
 
-  // 5. Check against teamRawMatches if provided
+  // 6. Check against indexed teamRawMatches if provided (O(1) lookup)
   if (teamRawMatches) {
-    const allMatches = Object.values(teamRawMatches).flat();
-    const match = allMatches.find((m) => {
-      if (!m) return false;
-      if (leg.matchId && String(m.id) === String(leg.matchId)) return true;
-      const mHome = String(m.homeTeam || m.home || '').toLowerCase().trim();
-      const mAway = String(m.awayTeam || m.away || '').toLowerCase().trim();
-      const l1 = (leg.team1 || '').toLowerCase().trim();
-      const l2 = (leg.team2 || '').toLowerCase().trim();
-      if (mHome && mAway && l1 && l2) {
-        return (mHome.includes(l1) || l1.includes(mHome)) && (mAway.includes(l2) || l2.includes(mAway));
-      }
-      return false;
-    });
-
+    const match = findRawMatchForLeg(leg, teamRawMatches);
     if (match) {
       const matchStatusStr = String(match.status || '').toLowerCase().trim();
       if (
         matchStatusStr === 'finished' ||
+        matchStatusStr === 'cancelled' ||
         match.result === 'V' ||
         match.result === 'E' ||
         match.result === 'D'
@@ -865,18 +1146,15 @@ export function isLegCompleted(
     }
   }
 
-  // 6. Leg is pending outcome and has no finished flag => NOT completed
+  // 7. Leg is pending outcome and has no finished flag => NOT completed
   if (leg.status === 'pending') {
     return false;
   }
 
-  // 7. Fallback for older persisted bets: if settledScore exists and status is settled (not pending) and not scheduled
+  // 8. Settled fallback (green/red) when real score is already recorded
   if (
-    leg.settledScore &&
-    (leg.status === 'green' || leg.status === 'red' || leg.status === 'void') &&
-    ms !== 'scheduled' &&
-    ms !== 'notstarted' &&
-    ms !== 'ns'
+    (leg.status === 'green' || leg.status === 'red') &&
+    (leg.settledScore || leg.score?.ft)
   ) {
     return true;
   }
@@ -886,10 +1164,6 @@ export function isLegCompleted(
 
 /**
  * Returns the game counter progress for a bet slip (completed / total).
- * E.g., for a 3-game multiple bet: initially 0/3, then 1/3, 2/3, 3/3 as games finish.
- *
- * The first number represents EXCLUSIVELY the number of completed matches,
- * while the second number represents the total number of matches on the ticket.
  */
 export function getBetGameProgress(
   bet: BetItem,
@@ -897,7 +1171,10 @@ export function getBetGameProgress(
 ): { completed: number; total: number } {
   if (bet.legs && bet.legs.length > 0) {
     const total = bet.legs.length;
-    const completed = bet.legs.filter((leg) => isLegCompleted(leg, teamRawMatches)).length;
+    let completed = 0;
+    for (let i = 0; i < total; i++) {
+      if (isLegCompleted(bet.legs[i], teamRawMatches)) completed++;
+    }
     return { completed: Math.min(completed, total), total };
   }
 
@@ -906,27 +1183,14 @@ export function getBetGameProgress(
   const total = rawParts.length > 0 ? rawParts.length : 1;
 
   if (teamRawMatches && bet.title) {
-    const allMatches = Object.values(teamRawMatches).flat();
     let completedCount = 0;
     for (const part of rawParts) {
       const matchup = parseMatchupFromTitle(part);
       if (matchup) {
-        const t1 = matchup.team1.toLowerCase().trim();
-        const t2 = matchup.team2.toLowerCase().trim();
-        const m = allMatches.find((matchItem) => {
-          if (!matchItem) return false;
-          const mHome = String(matchItem.homeTeam || matchItem.home || '').toLowerCase().trim();
-          const mAway = String(matchItem.awayTeam || matchItem.away || '').toLowerCase().trim();
-          return (
-            mHome &&
-            mAway &&
-            (mHome.includes(t1) || t1.includes(mHome)) &&
-            (mAway.includes(t2) || t2.includes(mAway))
-          );
-        });
+        const m = findRawMatchForLeg({ team1: matchup.team1, team2: matchup.team2, date: bet.date }, teamRawMatches);
         if (m) {
           const ms = String(m.status || '').toLowerCase().trim();
-          if (ms === 'finished' || m.result === 'V' || m.result === 'E' || m.result === 'D') {
+          if (ms === 'finished' || ms === 'cancelled' || m.result === 'V' || m.result === 'E' || m.result === 'D') {
             completedCount++;
           }
         }
@@ -946,16 +1210,13 @@ export function getBetGameProgress(
 
 /**
  * Checks if a single bet leg is currently in progress (live).
- * Returns true if the match is currently live or in halftime.
- * Returns false when the match is finished, scheduled, or cancelled.
  */
 export function isLegLive(
   leg: BetLeg,
   teamRawMatches?: Record<string | number, any[]>
 ): boolean {
   if (!leg) return false;
-  // If explicitly finished, not live
-  if (leg.matchStatus === 'finished') return false;
+  if (leg.matchStatus === 'finished' || leg.matchStatus === 'cancelled') return false;
 
   const ms = (leg.matchStatus || '').toLowerCase().trim();
   if (
@@ -970,24 +1231,11 @@ export function isLegLive(
     return true;
   }
 
-  // Check against teamRawMatches if provided
+  // Check against indexed teamRawMatches if provided
   if (teamRawMatches) {
-    const allMatches = Object.values(teamRawMatches).flat();
-    const match = allMatches.find((m) => {
-      if (!m) return false;
-      if (leg.matchId && String(m.id) === String(leg.matchId)) return true;
-      const mHome = String(m.homeTeam || m.home || '').toLowerCase().trim();
-      const mAway = String(m.awayTeam || m.away || '').toLowerCase().trim();
-      const l1 = (leg.team1 || '').toLowerCase().trim();
-      const l2 = (leg.team2 || '').toLowerCase().trim();
-      if (mHome && mAway && l1 && l2) {
-        return (mHome.includes(l1) || l1.includes(mHome)) && (mAway.includes(l2) || l2.includes(mAway));
-      }
-      return false;
-    });
-
+    const match = findRawMatchForLeg(leg, teamRawMatches);
     if (match) {
-      if (match.status === 'finished') return false;
+      if (match.status === 'finished' || match.status === 'cancelled') return false;
       const mStatus = String(match.status || '').toLowerCase().trim();
       if (
         mStatus === 'live' ||
@@ -1005,8 +1253,6 @@ export function isLegLive(
 
 /**
  * Checks if a bet slip currently has at least one game in progress (live).
- * Displays the indicator only when at least one game on the bet slip is currently live.
- * The indicator automatically disappears once there are no more live games on that bet slip.
  */
 export function isBetLive(
   bet: BetItem,
@@ -1018,28 +1264,14 @@ export function isBetLive(
     return bet.legs.some((leg) => isLegLive(leg, teamRawMatches));
   }
 
-  // Fallback for legacy bets without legs array
   if (teamRawMatches && bet.status === 'Pendente' && bet.title) {
-    const allMatches = Object.values(teamRawMatches).flat();
     const parts = bet.title.split(/\s*\+\s*/).filter(Boolean);
     return parts.some((part) => {
       const matchup = parseMatchupFromTitle(part);
       if (!matchup) return false;
-      const t1 = matchup.team1.toLowerCase().trim();
-      const t2 = matchup.team2.toLowerCase().trim();
-      const match = allMatches.find((m) => {
-        if (!m) return false;
-        const mHome = String(m.homeTeam || m.home || '').toLowerCase().trim();
-        const mAway = String(m.awayTeam || m.away || '').toLowerCase().trim();
-        return (
-          mHome &&
-          mAway &&
-          (mHome.includes(t1) || t1.includes(mHome)) &&
-          (mAway.includes(t2) || t2.includes(mAway))
-        );
-      });
+      const match = findRawMatchForLeg({ team1: matchup.team1, team2: matchup.team2, date: bet.date }, teamRawMatches);
       if (match) {
-        if (match.status === 'finished') return false;
+        if (match.status === 'finished' || match.status === 'cancelled') return false;
         const ms = String(match.status || '').toLowerCase().trim();
         return ms === 'live' || ms === 'halftime' || ms === 'ao vivo' || ms === 'em andamento';
       }

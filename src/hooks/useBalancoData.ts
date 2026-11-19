@@ -5,6 +5,43 @@ import { calculateBankrollStats, calculateBetProfit, syncBetWithMatches } from '
 const LOCAL_STORAGE_BETS_KEY = 'topzclubs_balanco_bets_v1';
 const LOCAL_STORAGE_BANKROLL_KEY = 'topzclubs_balanco_bankroll_v1';
 
+function normalizeBetDateStr(dateStr?: string): string {
+  if (!dateStr) return '';
+  const trimmed = String(dateStr).trim();
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+  const brMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (brMatch) {
+    const year = brMatch[3].length === 2 ? `20${brMatch[3]}` : brMatch[3];
+    return `${year}-${brMatch[2].padStart(2, '0')}-${brMatch[1].padStart(2, '0')}`;
+  }
+  return trimmed;
+}
+
+function dedupeBetsList(list: BetItem[]): BetItem[] {
+  const seenIds = new Set<string>();
+  const seenKeys = new Set<string>();
+  const uniqueBets: BetItem[] = [];
+
+  for (const rawBet of list) {
+    if (!rawBet || !rawBet.id || seenIds.has(rawBet.id)) continue;
+    seenIds.add(rawBet.id);
+
+    const normDate = normalizeBetDateStr(rawBet.date);
+    const b = normDate && normDate !== rawBet.date ? { ...rawBet, date: normDate } : rawBet;
+
+    const titleNorm = (b.title || '').toLowerCase().trim();
+    const compositeKey = `${normDate}_${titleNorm}`;
+    if (compositeKey && seenKeys.has(compositeKey)) continue;
+    if (compositeKey) seenKeys.add(compositeKey);
+
+    uniqueBets.push(b);
+  }
+  return uniqueBets;
+}
+
 export function useBalancoData(
   teamRawMatches?: Record<string | number, any[]>,
   dateMatches?: Match[],
@@ -46,27 +83,24 @@ export function useBalancoData(
       ]);
 
       if (betsRes && betsRes.success && Array.isArray(betsRes.bets)) {
-        const seenIds = new Set<string>();
-        const seenKeys = new Set<string>();
-        const uniqueBets: BetItem[] = [];
-
-        betsRes.bets.forEach((b: BetItem) => {
-          if (!b || !b.id || seenIds.has(b.id)) return;
-          seenIds.add(b.id);
-
-          const titleNorm = (b.title || '').toLowerCase().trim();
-          const compositeKey = `${b.date || ''}_${titleNorm}`;
-          if (compositeKey && seenKeys.has(compositeKey)) return;
-          if (compositeKey) seenKeys.add(compositeKey);
-
-          uniqueBets.push(b);
-        });
-
+        const uniqueBets = dedupeBetsList(betsRes.bets);
         setBets(uniqueBets);
-        if (triggerMatchSync && uniqueBets.some((b: BetItem) => b.status === 'Pendente' || (b.legs && b.legs.length > 0))) {
+        const needsSync = uniqueBets.some(
+          (b: BetItem) =>
+            b.status === 'Pendente' ||
+            (Array.isArray(b.legs) &&
+              b.legs.some(
+                (l) =>
+                  l.status === 'pending' ||
+                  (l.status !== 'void' &&
+                    l.matchStatus !== 'finished' &&
+                    l.matchStatus !== 'cancelled')
+              ))
+        );
+        if (triggerMatchSync && needsSync) {
           setTimeout(() => {
             handleSyncAllMatchResults(true, uniqueBets);
-          }, 1200);
+          }, 800);
         }
       }
       if (bankrollRes && bankrollRes.success && typeof bankrollRes.initialCapital === 'number') {
@@ -137,79 +171,70 @@ export function useBalancoData(
     return calculateBankrollStats(bets, initialCapital);
   }, [bets, initialCapital]);
 
-  // Sync all match results across all official sources
+  // Sync all match results across FotMob matchDetails + daily feeds
   const handleSyncAllMatchResults = async (silent = false, customBets?: BetItem[]) => {
     if (isSyncing) return;
     setIsSyncing(true);
 
     try {
-      const sourceBets = customBets || bets;
-      const datesSet = new Set<string>();
+      let baseBets = customBets || bets;
+      let totalUpdated = 0;
 
-      sourceBets.forEach((b) => {
-        if (b.status === 'Pendente' || (b.legs && b.legs.length > 0)) {
-          if (b.date) datesSet.add(b.date);
-          if (b.legs) {
-            b.legs.forEach((l) => {
-              if (l.date) datesSet.add(l.date);
-            });
-          }
+      // 1. Authoritative server-side FotMob verification (daily feed + matchDetails by matchId)
+      try {
+        const serverSyncRes = await fetch('/api/balanco/sync-results', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: !silent }),
+        }).then((r) => r.json());
+
+        if (serverSyncRes && serverSyncRes.success && Array.isArray(serverSyncRes.bets)) {
+          baseBets = dedupeBetsList(serverSyncRes.bets);
+          totalUpdated += Number(serverSyncRes.updatedCount) || 0;
         }
-      });
-
-      // Filter out dates already covered by dateMatches to avoid redundant network requests
-      const coveredDates = new Set(dateMatches?.map((m) => m.date).filter(Boolean) || []);
-      const datesToFetch: string[] = Array.from(datesSet).filter((d) => !coveredDates.has(d));
-
-      const matchesByDate: Record<string, Match[]> = {};
-      if (datesToFetch.length > 0) {
-        await Promise.all(
-          datesToFetch.map(async (d) => {
-            try {
-              const res = await fetch(`/api/fotmob/matches-by-date?date=${d}`);
-              const data = await res.json();
-              if (data && Array.isArray(data.matches)) {
-                matchesByDate[d] = data.matches;
-              }
-            } catch (e) {
-              console.warn(`Failed to fetch matches for date ${d}:`, e);
-            }
-          })
-        );
+      } catch (serverErr) {
+        console.warn('Server-side sync failed, continuing with local FotMob pool:', serverErr);
       }
 
-      // Pool all available matches from fetched dates and main page dateMatches
+      // 2. Also apply any in-memory dateMatches / teamRawMatches (live updates on screen)
       const allPoolMatches: Match[] = [...(dateMatches || [])];
-      Object.values(matchesByDate).forEach((list) => {
-        allPoolMatches.push(...list);
-      });
+      if (allPoolMatches.length > 0 || (teamRawMatches && Object.keys(teamRawMatches).length > 0)) {
+        baseBets = baseBets.map((bet) => {
+          const needsLocalSync =
+            bet.status === 'Pendente' ||
+            (Array.isArray(bet.legs) && bet.legs.some((l) => l.status === 'pending' || l.matchStatus === 'live'));
+          if (!needsLocalSync) return bet;
 
-      let updatedCount = 0;
-      const updatedBets = sourceBets.map((bet) => {
-        const { updatedBet, changed } = syncBetWithMatches(bet, allPoolMatches, teamRawMatches);
-        if (changed) {
-          updatedCount++;
-          fetch('/api/user-bets', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updatedBet),
-          }).catch((err) => console.warn('Error syncing bet with Supabase:', err));
-          return updatedBet;
-        }
-        return bet;
-      });
+          const { updatedBet, changed } = syncBetWithMatches(bet, allPoolMatches, teamRawMatches);
+          if (changed) {
+            totalUpdated++;
+            fetch('/api/user-bets', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(updatedBet),
+            }).catch((err) => console.warn('Error syncing bet with Supabase:', err));
+            return updatedBet;
+          }
+          return bet;
+        });
+      }
 
-      if (updatedCount > 0) {
-        setBets(updatedBets);
+      lastSyncRef.current = Date.now();
+
+      if (totalUpdated > 0 || baseBets !== (customBets || bets)) {
+        setBets(dedupeBetsList(baseBets));
+      }
+
+      if (totalUpdated > 0) {
         if (!silent) {
           setNotification({
-            message: `Sincronização concluída! ${updatedCount} ${updatedCount === 1 ? 'aposta atualizada' : 'apostas atualizadas'}.`,
+            message: `Sincronização concluída! ${totalUpdated} ${totalUpdated === 1 ? 'aposta atualizada' : 'apostas atualizadas'} com o FotMob.`,
             type: 'success',
           });
         }
       } else if (!silent) {
         setNotification({
-          message: 'Todas as apostas já estão 100% atualizadas com os resultados oficiais.',
+          message: 'Todas as apostas já estão 100% atualizadas com os resultados oficiais do FotMob.',
           type: 'info',
         });
       }
@@ -217,7 +242,7 @@ export function useBalancoData(
       console.error('Error during match sync:', err);
       if (!silent) {
         setNotification({
-          message: 'Erro ao sincronizar resultados com os servidores de dados.',
+          message: 'Erro ao sincronizar resultados com os servidores do FotMob.',
           type: 'info',
         });
       }
@@ -230,6 +255,8 @@ export function useBalancoData(
     const calculatedProfit = calculateBetProfit(bet.status, bet.amount, bet.odd);
     const sanitizedBet: BetItem = {
       ...bet,
+      date: normalizeBetDateStr(bet.date) || bet.date,
+      createdAt: bet.createdAt || new Date().toISOString(),
       profit: calculatedProfit,
     };
 
@@ -244,7 +271,7 @@ export function useBalancoData(
       // 2. Prevent duplicate ticket creation if same date + title exists
       const titleNorm = (sanitizedBet.title || '').toLowerCase().trim();
       const existingIdx = prev.findIndex(
-        (b) => b.date === sanitizedBet.date && (b.title || '').toLowerCase().trim() === titleNorm
+        (b) => normalizeBetDateStr(b.date) === sanitizedBet.date && (b.title || '').toLowerCase().trim() === titleNorm
       );
       if (existingIdx >= 0) {
         const next = [...prev];
@@ -267,6 +294,62 @@ export function useBalancoData(
       });
     } catch (e) {
       console.warn('Error saving bet to Supabase:', e);
+    }
+  };
+
+  const handleSaveMultipleBets = async (newBets: BetItem[], customMessage?: string) => {
+    if (!newBets || newBets.length === 0) return;
+    const baseMs = Date.now();
+    const sanitizedList: BetItem[] = newBets.map((bet, idx) => ({
+      ...bet,
+      date: normalizeBetDateStr(bet.date) || bet.date,
+      createdAt: bet.createdAt || new Date(baseMs + (newBets.length - 1 - idx) * 10).toISOString(),
+      profit: calculateBetProfit(bet.status, bet.amount, bet.odd),
+    }));
+
+    setBets((prev) => {
+      const next = [...prev];
+      for (let i = sanitizedList.length - 1; i >= 0; i--) {
+        const sanitizedBet = sanitizedList[i];
+        const idx = next.findIndex((b) => b.id === sanitizedBet.id);
+        if (idx >= 0) {
+          next[idx] = sanitizedBet;
+          continue;
+        }
+        const titleNorm = (sanitizedBet.title || '').toLowerCase().trim();
+        const existingIdx = next.findIndex(
+          (b) => normalizeBetDateStr(b.date) === sanitizedBet.date && (b.title || '').toLowerCase().trim() === titleNorm
+        );
+        if (existingIdx >= 0) {
+          next[existingIdx] = sanitizedBet;
+          continue;
+        }
+        next.unshift(sanitizedBet);
+      }
+      return next;
+    });
+
+    setNotification({
+      message:
+        customMessage ||
+        `${sanitizedList.length} ${
+          sanitizedList.length === 1 ? 'bilhete salvo' : 'bilhetes salvos'
+        } com sucesso!`,
+      type: 'success',
+    });
+
+    try {
+      await Promise.all(
+        sanitizedList.map((sanitizedBet) =>
+          fetch('/api/user-bets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sanitizedBet),
+          })
+        )
+      );
+    } catch (e) {
+      console.warn('Error saving multiple bets to Supabase:', e);
     }
   };
 
@@ -319,6 +402,7 @@ export function useBalancoData(
     isSyncing,
     handleSyncAllMatchResults,
     handleSaveBet,
+    handleSaveMultipleBets,
     handleDeleteBet,
     handleSaveBankroll,
     refreshBetsFromServer,

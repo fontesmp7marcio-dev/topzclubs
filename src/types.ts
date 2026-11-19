@@ -27,7 +27,7 @@ export interface Match {
   score?: Score | null;
   time?: string;
   goals?: Goal[];
-  status?: 'finished' | 'live' | 'scheduled' | 'postponed' | 'halftime';
+  status?: 'finished' | 'live' | 'scheduled' | 'postponed' | 'cancelled' | 'halftime';
   liveMinute?: string;
   stadium?: string;
   fotmobPageUrl?: string;
@@ -35,6 +35,7 @@ export interface Match {
   leagueName?: string;
   countryCcode?: string;
   isCup?: boolean;
+  isVoided?: boolean;
 }
 
 export type CompetitionFilter = 'all' | 'league' | 'cup';
@@ -251,7 +252,7 @@ export interface BetLeg {
   status: BetLegStatus;
   score?: { ft: [number, number] } | null;
   settledScore?: [number, number] | null;
-  matchStatus?: 'scheduled' | 'live' | 'finished' | 'postponed' | 'halftime';
+  matchStatus?: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled' | 'halftime';
   time?: string;
   note?: string;
   league?: string;
@@ -298,7 +299,7 @@ export interface BankrollStats {
   initialCapital: number;
 }
 
-export type AutoBetMode = 'home' | 'away';
+export type AutoBetMode = 'all' | 'home' | 'away';
 
 export type AutoBetMarketOption =
   | 'OVER_1_5'
@@ -317,6 +318,8 @@ export interface AutoBetConfig {
   stake: number;
   defaultOdd: number;
   maxGamesPerTicket: number;
+  fireCountFilter?: number;
+  ticketCount?: number | null;
   updatedAt?: string;
   lastRunDate?: string;
   lastRunAt?: string;
@@ -337,6 +340,8 @@ export interface AutoBetPreview {
     leagueName?: string;
     favoriteSide: 'home' | 'away';
     alreadyInBet: boolean;
+    fireStreak?: number;
+    emojis?: string[];
   }>;
 }
 

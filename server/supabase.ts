@@ -154,6 +154,7 @@ export async function fetchUserBets() {
       .from('user_bets')
       .select('*')
       .order('date', { ascending: false })
+      .order('created_at', { ascending: false })
   );
 
   if (error) {
@@ -183,23 +184,28 @@ export async function fetchUserBets() {
 }
 
 export async function saveUserBet(bet: any) {
+  const payload: any = {
+    id: String(bet.id),
+    date: bet.date,
+    bookmaker: bet.bookmaker,
+    title: bet.title,
+    odd: Number(bet.odd),
+    sport: bet.sport || 'Futebol',
+    status: bet.status,
+    format: bet.format,
+    amount: Number(bet.amount),
+    potential_return: Number(bet.potentialReturn),
+    profit: Number(bet.profit),
+    legs: bet.legs || [],
+  };
+  if (bet.createdAt) {
+    payload.created_at = bet.createdAt;
+  }
+
   const { error } = await executeSupabaseWithRetry(() =>
     supabaseAdmin
       .from('user_bets')
-      .upsert({
-        id: String(bet.id),
-        date: bet.date,
-        bookmaker: bet.bookmaker,
-        title: bet.title,
-        odd: Number(bet.odd),
-        sport: bet.sport || 'Futebol',
-        status: bet.status,
-        format: bet.format,
-        amount: Number(bet.amount),
-        potential_return: Number(bet.potentialReturn),
-        profit: Number(bet.profit),
-        legs: bet.legs || [],
-      })
+      .upsert(payload)
   );
 
   if (error) {

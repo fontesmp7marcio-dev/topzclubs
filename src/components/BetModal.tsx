@@ -1,7 +1,24 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { X, Calendar, Calculator, Plus, Edit2, Trash2, Check, Star, RefreshCw, Flame, Bot } from 'lucide-react';
+import {
+  X,
+  Calendar,
+  Calculator,
+  Plus,
+  Edit2,
+  Trash2,
+  Check,
+  RefreshCw,
+  Home,
+  Plane,
+  Bot,
+  Zap,
+  Hand,
+  Minus,
+  Clock,
+} from 'lucide-react';
 import {
   AutoBetConfig,
+  AutoBetMarketOption,
   BetItem,
   BetStatus,
   BetFormat,
@@ -24,6 +41,11 @@ import {
   resolveOfficialMatchResult,
   syncBetWithMatches,
 } from '../utils/betSync';
+import {
+  DEFAULT_AUTO_BET_CONFIG,
+  buildAutoBetItemsFromChunks,
+  chunkMatchesIntoTickets,
+} from '../utils/autoBetBuilder';
 import { TeamCrest } from './TeamCrest';
 import { MatchupPill } from './MatchupPill';
 import { isMatchInFavorites } from '../data/curatedSchedule';
@@ -44,8 +66,10 @@ interface BetModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (bet: BetItem) => void;
+  onSaveMultiple?: (bets: BetItem[], customMessage?: string) => Promise<void> | void;
   onDelete?: (id: string) => void;
   initialBet?: BetItem | null;
+  initialBuildMode?: 'manual' | 'auto';
   existingBets?: BetItem[];
   supabaseFavorites?: { id: number; name: string; country?: string; league?: string }[];
   teamForms?: Record<string | number, string[]>;
@@ -54,6 +78,7 @@ interface BetModalProps {
   dateMatches?: Match[];
   selectedDate?: string;
   autoBetConfig?: AutoBetConfig | null;
+  onAutoBetConfigUpdated?: (config: AutoBetConfig, message?: string) => Promise<void> | void;
   onOpenAutoBet?: () => void;
 }
 
@@ -241,9 +266,9 @@ const MatchSelectionRow = React.memo<MatchSelectionRowProps>(({
 interface LegSelectionRowProps {
   leg: BetLeg;
   idx: number;
+  isEditing?: boolean;
   options: { value: string; label: string }[];
   onMarketChange: (legIndex: number, market: string) => void;
-  onTimeChange: (legIndex: number, time: string) => void;
   onLegStatusChange: (legIndex: number, status: BetLegStatus) => void;
   onRemoveLeg: (legIndex: number) => void;
 }
@@ -251,9 +276,9 @@ interface LegSelectionRowProps {
 const LegSelectionRow = React.memo<LegSelectionRowProps>(({
   leg,
   idx,
+  isEditing,
   options,
   onMarketChange,
-  onTimeChange,
   onLegStatusChange,
   onRemoveLeg,
 }) => {
@@ -299,10 +324,10 @@ const LegSelectionRow = React.memo<LegSelectionRowProps>(({
         </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1.5 border-t border-[#272734]">
+      <div className={`grid grid-cols-1 ${isEditing ? 'sm:grid-cols-2' : ''} gap-2.5 pt-1.5 border-t border-[#272734]`}>
         <div>
           <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-            Mercado Apostado (5 Opções)
+            Mercado
           </label>
           <select
             value={leg.market || 'OVER_1_5'}
@@ -317,50 +342,39 @@ const LegSelectionRow = React.memo<LegSelectionRowProps>(({
           </select>
         </div>
 
-        <div>
-          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-            Horário do Jogo
-          </label>
-          <input
-            type="text"
-            value={leg.time || '16:00'}
-            onChange={(e) => onTimeChange(idx, e.target.value)}
-            className="w-full bg-[#121216] border border-[#30303e] focus:border-emerald-500 rounded-lg px-2.5 py-1.5 text-xs text-zinc-100 font-bold outline-none"
-            placeholder="16:00"
-          />
-        </div>
-
-        <div>
-          <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-            Resultado
-          </label>
-          <select
-            value={leg.status || 'pending'}
-            onChange={(e) => onLegStatusChange(idx, e.target.value as BetLegStatus)}
-            className={`w-full bg-[#121216] border rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none cursor-pointer ${
-              leg.status === 'green'
-                ? 'text-emerald-400 border-emerald-500/50'
-                : leg.status === 'red'
-                ? 'text-rose-400 border-rose-500/50'
-                : leg.status === 'void'
-                ? 'text-zinc-300 border-zinc-600'
-                : 'text-amber-400 border-amber-500/50'
-            }`}
-          >
-            <option value="green" className="bg-[#18181c] text-emerald-400 font-bold">
-              🟢 Green (Acertou)
-            </option>
-            <option value="red" className="bg-[#18181c] text-rose-400 font-bold">
-              🔴 Red (Errou)
-            </option>
-            <option value="pending" className="bg-[#18181c] text-amber-400 font-bold">
-              🟡 Pendente
-            </option>
-            <option value="void" className="bg-[#18181c] text-zinc-300 font-bold">
-              ⚪ Anulada / Reembolsada
-            </option>
-          </select>
-        </div>
+        {isEditing && (
+          <div>
+            <label className="block text-[9px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+              Resultado
+            </label>
+            <select
+              value={leg.status || 'pending'}
+              onChange={(e) => onLegStatusChange(idx, e.target.value as BetLegStatus)}
+              className={`w-full bg-[#121216] border rounded-lg px-2.5 py-1.5 text-xs font-bold outline-none cursor-pointer ${
+                leg.status === 'green'
+                  ? 'text-emerald-400 border-emerald-500/50'
+                  : leg.status === 'red'
+                  ? 'text-rose-400 border-rose-500/50'
+                  : leg.status === 'void'
+                  ? 'text-zinc-300 border-zinc-600'
+                  : 'text-amber-400 border-amber-500/50'
+              }`}
+            >
+              <option value="green" className="bg-[#18181c] text-emerald-400 font-bold">
+                🟢 Green (Acertou)
+              </option>
+              <option value="red" className="bg-[#18181c] text-rose-400 font-bold">
+                🔴 Red (Errou)
+              </option>
+              <option value="pending" className="bg-[#18181c] text-amber-400 font-bold">
+                🟡 Pendente
+              </option>
+              <option value="void" className="bg-[#18181c] text-zinc-300 font-bold">
+                ⚪ Anulada / Reembolsada
+              </option>
+            </select>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -370,8 +384,10 @@ export const BetModal: React.FC<BetModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  onSaveMultiple,
   onDelete,
   initialBet,
+  initialBuildMode = 'manual',
   existingBets = [],
   supabaseFavorites,
   teamForms,
@@ -380,9 +396,33 @@ export const BetModal: React.FC<BetModalProps> = ({
   dateMatches,
   selectedDate,
   autoBetConfig,
-  onOpenAutoBet,
+  onAutoBetConfigUpdated,
 }) => {
   const isEditing = !!initialBet;
+
+  // Build Mode: Manual vs Automação (inside Adicionar Aposta)
+  const [buildMode, setBuildMode] = useState<'manual' | 'auto'>(
+    initialBet ? 'manual' : initialBuildMode
+  );
+
+  // Automation Config States (integrated inside Adicionar Aposta)
+  const [autoEnabled, setAutoEnabled] = useState<boolean>(
+    autoBetConfig?.updatedAt ? Boolean(autoBetConfig.enabled) : true
+  );
+  const [autoMarket, setAutoMarket] = useState<AutoBetMarketOption>(
+    autoBetConfig?.market ?? 'OVER_1_5'
+  );
+  const [autoGamesPerTicket, setAutoGamesPerTicket] = useState<number>(
+    Math.max(1, Math.min(3, autoBetConfig?.maxGamesPerTicket ?? 3))
+  );
+  const [autoTicketCountMode, setAutoTicketCountMode] = useState<'auto' | 'custom'>(
+    autoBetConfig?.ticketCount && autoBetConfig.ticketCount > 0 ? 'custom' : 'auto'
+  );
+  const [autoCustomTicketCount, setAutoCustomTicketCount] = useState<number>(
+    autoBetConfig?.ticketCount && autoBetConfig.ticketCount > 0 ? autoBetConfig.ticketCount : 1
+  );
+  const [isAutomating, setIsAutomating] = useState<boolean>(false);
+  const [isSavingAutoConfig, setIsSavingAutoConfig] = useState<boolean>(false);
 
   // Form states
   const [date, setDate] = useState<string>(() => {
@@ -407,18 +447,78 @@ export const BetModal: React.FC<BetModalProps> = ({
   );
   const [legs, setLegs] = useState<BetLeg[]>([]);
   const [internalRawMatches, setInternalRawMatches] = useState<Record<string | number, MatchItem[]>>({});
-  const [showAllDayMatches, setShowAllDayMatches] = useState<boolean>(false);
+  const [mandoFilter, setMandoFilter] = useState<'all' | 'home' | 'away'>('all');
   const [quickFilter, setQuickFilter] = useState<'foguinho' | null>(null);
-  const [fireCountFilter, setFireCountFilter] = useState<number>(0); // 0 = todos, 2 = 2 foguinhos, 3 = 3 foguinhos
+  const [fireCountFilter, setFireCountFilter] = useState<number>(0); // 0 = todos, 1 = 1 foguinho, 2 = 2 foguinhos, 3 = 3+ foguinhos
   const [oddsAvailability, setOddsAvailability] = useState<Record<string | number, { bet365: boolean; betano: boolean }>>({});
   const fetchedTeamsRef = React.useRef<Set<string | number>>(new Set());
 
-  // Reset showAllDayMatches, quickFilter and fireCountFilter when date changes or modal opens
+  // Sync mode & filters when modal opens
   useEffect(() => {
-    setShowAllDayMatches(false);
-    setQuickFilter(null);
-    setFireCountFilter(0);
-  }, [date, isOpen]);
+    if (!isOpen) return;
+    const nextBuildMode = initialBet ? 'manual' : initialBuildMode;
+    setBuildMode(nextBuildMode);
+
+    if (nextBuildMode === 'auto') {
+      const cfg = autoBetConfig || DEFAULT_AUTO_BET_CONFIG;
+      setMandoFilter(cfg.mode === 'away' ? 'away' : cfg.mode === 'all' ? 'all' : 'home');
+      const fireVal = cfg.fireCountFilter || 0;
+      setQuickFilter(fireVal > 0 ? 'foguinho' : null);
+      setFireCountFilter(fireVal);
+    } else {
+      setMandoFilter('all');
+      setQuickFilter(null);
+      setFireCountFilter(0);
+    }
+  }, [isOpen, initialBet, initialBuildMode]);
+
+  // Reset fire count filter only when user switches date manually while modal is open
+  useEffect(() => {
+    if (!isOpen) return;
+    if (buildMode === 'manual') {
+      setQuickFilter(null);
+      setFireCountFilter(0);
+    }
+  }, [date]);
+
+  // Load latest auto-bet config from server when modal opens (if creating new bet)
+  useEffect(() => {
+    if (!isOpen || initialBet) return;
+    let cancelled = false;
+
+    fetch('/api/auto-bet/config?preview=0')
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data && data.success && data.config) {
+          const cfg: AutoBetConfig = data.config;
+          const hasBeenConfigured = Boolean(cfg.updatedAt);
+          setAutoEnabled(hasBeenConfigured ? Boolean(cfg.enabled) : true);
+          setAutoMarket(cfg.market || 'OVER_1_5');
+          setAutoGamesPerTicket(Math.max(1, Math.min(3, cfg.maxGamesPerTicket || 3)));
+          if (cfg.ticketCount && cfg.ticketCount > 0) {
+            setAutoTicketCountMode('custom');
+            setAutoCustomTicketCount(cfg.ticketCount);
+          } else {
+            setAutoTicketCountMode('auto');
+          }
+          if (initialBuildMode === 'auto') {
+            setBookmaker(cfg.bookmaker === 'Bet365' ? 'Bet365' : 'Betano');
+            setAmount(String(cfg.stake ?? 20));
+            setOdd(String(cfg.defaultOdd ?? 2.0));
+            setMandoFilter(cfg.mode === 'away' ? 'away' : cfg.mode === 'all' ? 'all' : 'home');
+            const fireVal = cfg.fireCountFilter || 0;
+            setQuickFilter(fireVal > 0 ? 'foguinho' : null);
+            setFireCountFilter(fireVal);
+          }
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, initialBet, initialBuildMode]);
 
   // Load user favorites from Supabase API (or fallback to master list) when modal opens
   useEffect(() => {
@@ -480,20 +580,40 @@ export const BetModal: React.FC<BetModalProps> = ({
       setLegs(initialBet.legs || []);
     } else {
       const defaultDate = selectedDate || getBrasiliaTodayStr();
+      const cfg = autoBetConfig;
       setDate(defaultDate);
-      setBookmaker('Betano');
+      setBookmaker(
+        initialBuildMode === 'auto' && cfg?.bookmaker
+          ? cfg.bookmaker === 'Bet365'
+            ? 'Bet365'
+            : 'Betano'
+          : 'Betano'
+      );
       setTitle('');
-      setOdd('2.00');
+      setOdd(
+        initialBuildMode === 'auto' && cfg?.defaultOdd
+          ? String(cfg.defaultOdd)
+          : '2.00'
+      );
       setSport('Futebol');
       setStatus('Pendente');
       setFormat('Simples');
-      setAmount('20.00');
+      setAmount(
+        initialBuildMode === 'auto' && cfg?.stake
+          ? String(cfg.stake)
+          : '20.00'
+      );
       setDeleteConfirm(false);
       setSelectedMatchIds([]);
       setLegs([]);
+      if (cfg) {
+        setAutoEnabled(cfg.updatedAt ? Boolean(cfg.enabled) : true);
+        setAutoMarket(cfg.market || 'OVER_1_5');
+        setAutoGamesPerTicket(Math.max(1, Math.min(3, cfg.maxGamesPerTicket || 3)));
+      }
     }
     setIsDeleting(false);
-  }, [initialBet, isOpen, selectedDate]);
+  }, [initialBet, isOpen, selectedDate, initialBuildMode]);
 
 
   // Keep existing legs synchronized with latest official scores from all available sources
@@ -805,10 +925,8 @@ export const BetModal: React.FC<BetModalProps> = ({
     }
   }, [isOpen, allAvailableMatches, findFavoriteClub, teamForms, combinedRawMatches, userFavorites, supabaseFavorites]);
 
-  const activeAutoMode = autoBetConfig?.enabled ? autoBetConfig.mode : null;
-
   // Evaluate each match: check if favorite teams have active fire emoji (🔥 Under 1.5)
-  // When automation criteria ('home' | 'away') is configured, strictly enforce Home or Away favorites only.
+  // Respect manual Casa / Fora filter selected in BetModal
   const matchesWithStreakInfo = React.useMemo(() => {
     if (!allAvailableMatches.length) return [];
     const activeFavList =
@@ -820,31 +938,25 @@ export const BetModal: React.FC<BetModalProps> = ({
 
     return allAvailableMatches.map((m) => {
       const fav1 = findFavoriteClub(m.team1, m.team1Id);
-      const rawIsFav1 = !!fav1 || (!(m.team1Id && Number(m.team1Id) > 0) && isTeamNameInFavorites(m.team1, activeFavList));
+      const isFav1 = !!fav1 || (!(m.team1Id && Number(m.team1Id) > 0) && isTeamNameInFavorites(m.team1, activeFavList));
       const dictId1 = getTeamId(m.team1);
       const resolvedFav1Id = m.team1Id || fav1?.id || dictId1 || 0;
-      const emojis1 = rawIsFav1 ? getTeamEmojis(fav1 ? fav1.name : m.team1, resolvedFav1Id) : [];
-      const rawStreakFire1 = getEndingFireStreak(emojis1);
+      const emojis1 = isFav1 ? getTeamEmojis(fav1 ? fav1.name : m.team1, resolvedFav1Id) : [];
+      const streakFire1 = getEndingFireStreak(emojis1);
 
       const fav2 = findFavoriteClub(m.team2, m.team2Id);
-      const rawIsFav2 = !!fav2 || (!(m.team2Id && Number(m.team2Id) > 0) && isTeamNameInFavorites(m.team2, activeFavList));
+      const isFav2 = !!fav2 || (!(m.team2Id && Number(m.team2Id) > 0) && isTeamNameInFavorites(m.team2, activeFavList));
       const dictId2 = getTeamId(m.team2);
       const resolvedFav2Id = m.team2Id || fav2?.id || dictId2 || 0;
-      const emojis2 = rawIsFav2 ? getTeamEmojis(fav2 ? fav2.name : m.team2, resolvedFav2Id) : [];
-      const rawStreakFire2 = getEndingFireStreak(emojis2);
-
-      // Strictly enforce configured modality when activeAutoMode is 'home' or 'away'
-      const isFav1 = activeAutoMode === 'away' ? false : rawIsFav1;
-      const streakFire1 = activeAutoMode === 'away' ? 0 : rawStreakFire1;
-      const isFav2 = activeAutoMode === 'home' ? false : rawIsFav2;
-      const streakFire2 = activeAutoMode === 'home' ? 0 : rawStreakFire2;
+      const emojis2 = isFav2 ? getTeamEmojis(fav2 ? fav2.name : m.team2, resolvedFav2Id) : [];
+      const streakFire2 = getEndingFireStreak(emojis2);
 
       const fav1FireQualifies = isFav1 && streakFire1 >= 1;
       const fav2FireQualifies = isFav2 && streakFire2 >= 1;
       const hasFireStreak =
-        activeAutoMode === 'home'
+        mandoFilter === 'home'
           ? fav1FireQualifies
-          : activeAutoMode === 'away'
+          : mandoFilter === 'away'
           ? fav2FireQualifies
           : fav1FireQualifies || fav2FireQualifies;
       const qualifies = hasFireStreak;
@@ -863,7 +975,7 @@ export const BetModal: React.FC<BetModalProps> = ({
         qualifies,
       };
     });
-  }, [allAvailableMatches, findFavoriteClub, getTeamEmojis, userFavorites, supabaseFavorites, activeAutoMode]);
+  }, [allAvailableMatches, findFavoriteClub, getTeamEmojis, userFavorites, supabaseFavorites, mandoFilter]);
 
   // Helper para normalizar e comparar datas (YYYY-MM-DD e DD/MM/YYYY)
   const areDatesSameDay = useCallback((d1?: string, d2?: string): boolean => {
@@ -942,32 +1054,37 @@ export const BetModal: React.FC<BetModalProps> = ({
     [usedInOtherBets]
   );
 
-  // Total de partidas que qualificam antes de filtrar as já utilizadas
-  const totalQualifyingMatches = React.useMemo(() => {
-    return matchesWithStreakInfo.filter((item) => item.qualifies);
-  }, [matchesWithStreakInfo]);
+  // Total de partidas disponíveis na grade do dia (sem filtro de mando/foguinho, excluindo já utilizadas em outros bilhetes)
+  const totalGradeAvailableCount = React.useMemo(() => {
+    return matchesWithStreakInfo.filter(
+      (item) =>
+        (item.isFav1 && item.streakFire1 >= 1 || item.isFav2 && item.streakFire2 >= 1) &&
+        !isMatchAlreadyUsedInOtherBet(item.match)
+    ).length;
+  }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet]);
 
-  // Matches filtrados estritamente pela regra do foguinho E excluindo jogos já usados em outros bilhetes
+  // Matches filtrados estritamente pela regra do foguinho (+ filtro Casa/Fora) E excluindo jogos já usados em outros bilhetes
   const streakMatches = React.useMemo(() => {
     return matchesWithStreakInfo
       .filter((item) => {
         if (!item.qualifies || !item.hasFireStreak) return false;
-        if (quickFilter === 'foguinho') {
+        if (quickFilter === 'foguinho' && fireCountFilter > 0) {
+          const checkSide1 = mandoFilter !== 'away' && item.isFav1;
+          const checkSide2 = mandoFilter !== 'home' && item.isFav2;
           if (fireCountFilter === 1) {
-            return (item.isFav1 && item.streakFire1 === 1) || (item.isFav2 && item.streakFire2 === 1);
+            return (checkSide1 && item.streakFire1 === 1) || (checkSide2 && item.streakFire2 === 1);
           }
           if (fireCountFilter === 2) {
-            return (item.isFav1 && item.streakFire1 === 2) || (item.isFav2 && item.streakFire2 === 2);
+            return (checkSide1 && item.streakFire1 === 2) || (checkSide2 && item.streakFire2 === 2);
           }
           if (fireCountFilter === 3) {
-            return (item.isFav1 && item.streakFire1 >= 3) || (item.isFav2 && item.streakFire2 >= 3);
+            return (checkSide1 && item.streakFire1 >= 3) || (checkSide2 && item.streakFire2 >= 3);
           }
-          return true;
         }
         return true;
       })
       .filter((item) => !isMatchAlreadyUsedInOtherBet(item.match));
-  }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet, quickFilter, fireCountFilter]);
+  }, [matchesWithStreakInfo, isMatchAlreadyUsedInOtherBet, quickFilter, fireCountFilter, mandoFilter]);
 
   // Quantidade de jogos ocultados por já estarem em outros bilhetes salvos
   const hiddenMatchesCount = React.useMemo(() => {
@@ -980,6 +1097,79 @@ export const BetModal: React.FC<BetModalProps> = ({
   const displayedMatchItems = React.useMemo(() => {
     return streakMatches;
   }, [streakMatches]);
+
+  // Deduplicated pool for automation (garante que nenhum time ou confronto apareça repetido entre bilhetes)
+  const autoEligibleItems = React.useMemo(() => {
+    const seenIds = new Set<string>();
+    const seenTeams = new Set<string>();
+    const list: typeof displayedMatchItems = [];
+
+    for (const item of displayedMatchItems) {
+      const m = item.match;
+      const mId = m.id ? String(m.id) : '';
+      const n1 = normalizeTeamName(m.team1 || '');
+      const n2 = normalizeTeamName(m.team2 || '');
+      if (mId && seenIds.has(mId)) continue;
+      if ((n1 && seenTeams.has(n1)) || (n2 && seenTeams.has(n2))) continue;
+
+      if (mId) seenIds.add(mId);
+      if (n1) seenTeams.add(n1);
+      if (n2) seenTeams.add(n2);
+      list.push(item);
+    }
+
+    // Prioritize higher fire streak, then earliest kickoff time
+    return [...list].sort((a, b) => {
+      const fireA =
+        mandoFilter === 'home'
+          ? a.streakFire1
+          : mandoFilter === 'away'
+          ? a.streakFire2
+          : Math.max(a.streakFire1, a.streakFire2);
+      const fireB =
+        mandoFilter === 'home'
+          ? b.streakFire1
+          : mandoFilter === 'away'
+          ? b.streakFire2
+          : Math.max(b.streakFire1, b.streakFire2);
+      if (fireB !== fireA) return fireB - fireA;
+      return String(a.match.time || '99:99').localeCompare(String(b.match.time || '99:99'));
+    });
+  }, [displayedMatchItems, mandoFilter]);
+
+  const maxPossibleAutoTickets = React.useMemo(() => {
+    if (autoEligibleItems.length === 0) return 0;
+    const perTicket = Math.max(1, Math.min(3, autoGamesPerTicket));
+    return Math.ceil(autoEligibleItems.length / perTicket);
+  }, [autoEligibleItems.length, autoGamesPerTicket]);
+
+  const effectiveAutoTicketCount = React.useMemo(() => {
+    if (maxPossibleAutoTickets === 0) return 0;
+    if (autoTicketCountMode === 'auto') return maxPossibleAutoTickets;
+    return Math.max(1, Math.min(maxPossibleAutoTickets, autoCustomTicketCount));
+  }, [maxPossibleAutoTickets, autoTicketCountMode, autoCustomTicketCount]);
+
+  const plannedAutoChunks = React.useMemo(() => {
+    if (autoEligibleItems.length === 0 || effectiveAutoTicketCount === 0) return [];
+    return chunkMatchesIntoTickets(
+      autoEligibleItems,
+      autoGamesPerTicket,
+      effectiveAutoTicketCount
+    );
+  }, [autoEligibleItems, autoGamesPerTicket, effectiveAutoTicketCount]);
+
+  const plannedBreakdownSummary = React.useMemo(() => {
+    if (plannedAutoChunks.length === 0) return '0 bilhetes';
+    const counts = plannedAutoChunks.map((c) => c.length);
+    const triples = counts.filter((n) => n === 3).length;
+    const doubles = counts.filter((n) => n === 2).length;
+    const singles = counts.filter((n) => n === 1).length;
+    const parts: string[] = [];
+    if (triples > 0) parts.push(`${triples} tripla${triples > 1 ? 's' : ''}`);
+    if (doubles > 0) parts.push(`${doubles} dupla${doubles > 1 ? 's' : ''}`);
+    if (singles > 0) parts.push(`${singles} simples`);
+    return parts.join(' + ');
+  }, [plannedAutoChunks]);
 
   const displayedMatchIdsKey = React.useMemo(() => {
     return streakMatches.map((item) => item.match.id).sort().join(',') + '_' + date;
@@ -1144,8 +1334,129 @@ export const BetModal: React.FC<BetModalProps> = ({
   // Profit calculation based on status (Centralized formula)
   const calculatedProfit = calculateBetProfit(status, parsedAmount, parsedOdd);
 
+  const buildConfigPayload = (): AutoBetConfig => ({
+    enabled: autoEnabled,
+    mode: mandoFilter,
+    bookmaker,
+    market: autoMarket,
+    stake: Math.max(1, parsedAmount || 20),
+    defaultOdd: Math.max(1.01, parsedOdd || 2.0),
+    maxGamesPerTicket: Math.max(1, Math.min(3, autoGamesPerTicket)),
+    fireCountFilter: quickFilter === 'foguinho' ? fireCountFilter : 0,
+    ticketCount: autoTicketCountMode === 'custom' ? effectiveAutoTicketCount : null,
+  });
+
+  const persistAutoConfig = async (
+    cfgPayload: AutoBetConfig,
+    toastMessage?: string
+  ) => {
+    try {
+      const res = await fetch('/api/auto-bet/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...cfgPayload,
+          date,
+          skipRun: true,
+        }),
+      });
+      const data = await res.json();
+      if (data && data.success && data.config && onAutoBetConfigUpdated) {
+        await onAutoBetConfigUpdated(data.config, toastMessage);
+      }
+    } catch (err) {
+      console.warn('Error persisting auto-bet config from BetModal:', err);
+    }
+  };
+
+  const handleSaveAutoConfigOnly = async () => {
+    if (isSavingAutoConfig) return;
+    setIsSavingAutoConfig(true);
+    try {
+      const cfgPayload = buildConfigPayload();
+      const modeText =
+        mandoFilter === 'home'
+          ? 'Favoritos em Casa'
+          : mandoFilter === 'away'
+          ? 'Favoritos Fora'
+          : 'Todos os Favoritos';
+      const msg = cfgPayload.enabled
+        ? `Automação ativa salva (${modeText})!`
+        : 'Automação diária desativada e salva.';
+      await persistAutoConfig(cfgPayload, msg);
+      onClose();
+    } finally {
+      setIsSavingAutoConfig(false);
+    }
+  };
+
+  const handleAutomateTickets = async () => {
+    if (isAutomating || plannedAutoChunks.length === 0) return;
+    setIsAutomating(true);
+    try {
+      const cfgPayload = buildConfigPayload();
+      const favoriteSidesByMatchId: Record<string, 'home' | 'away'> = {};
+      const matchChunks: Match[][] = plannedAutoChunks.map((chunk) =>
+        chunk.map((item) => {
+          const m = item.match;
+          const mId = m.id ? String(m.id) : '';
+          if (mId) {
+            if (mandoFilter === 'home') {
+              favoriteSidesByMatchId[mId] = 'home';
+            } else if (mandoFilter === 'away') {
+              favoriteSidesByMatchId[mId] = 'away';
+            } else {
+              const homeQual = item.isFav1 && item.streakFire1 >= 1;
+              const awayQual = item.isFav2 && item.streakFire2 >= 1;
+              favoriteSidesByMatchId[mId] =
+                homeQual && (!awayQual || item.streakFire1 >= item.streakFire2)
+                  ? 'home'
+                  : 'away';
+            }
+          }
+          return { ...m, date };
+        })
+      );
+
+      const generatedBets = buildAutoBetItemsFromChunks(
+        matchChunks,
+        date,
+        cfgPayload,
+        favoriteSidesByMatchId
+      );
+
+      const modeText =
+        mandoFilter === 'home'
+          ? 'Favoritos em Casa'
+          : mandoFilter === 'away'
+          ? 'Favoritos Fora'
+          : 'Favoritos (Casa e Fora)';
+      const successMsg = `${generatedBets.length} ${
+        generatedBets.length === 1 ? 'bilhete montado' : 'bilhetes montados'
+      } (${modeText}) e salvo no Balanço!`;
+
+      if (onSaveMultiple) {
+        await onSaveMultiple(generatedBets, successMsg);
+      } else {
+        for (const b of generatedBets) {
+          onSave(b);
+        }
+      }
+
+      await persistAutoConfig(cfgPayload);
+      onClose();
+    } finally {
+      setIsAutomating(false);
+    }
+  };
+
   const handleFormSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isEditing && buildMode === 'auto') {
+      handleAutomateTickets();
+      return;
+    }
+
     const finalTitle = title.trim() || legs.map((l) => `${l.team1} x ${l.team2}`).join(' + ');
     if (legs.length === 0) {
       alert('Por favor, selecione ao menos uma partida para o bilhete!');
@@ -1188,6 +1499,13 @@ export const BetModal: React.FC<BetModalProps> = ({
     }
   };
 
+  const modeSummaryLabel =
+    mandoFilter === 'home'
+      ? 'em casa'
+      : mandoFilter === 'away'
+      ? 'fora de casa'
+      : 'na grade';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-xs overflow-y-auto select-none">
       <div 
@@ -1198,21 +1516,24 @@ export const BetModal: React.FC<BetModalProps> = ({
         <div className="flex items-center justify-between p-4 sm:p-5 border-b border-[#222226] shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-[#ccff00]/10 border border-[#ccff00]/30 flex items-center justify-center text-[#ccff00]">
-              {isEditing ? <Edit2 className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
+              {isEditing ? <Edit2 className="w-5 h-5" /> : buildMode === 'auto' ? <Bot className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
             </div>
             <div>
               <h2 className="text-sm sm:text-base font-black tracking-tight text-white uppercase font-sans">
                 {isEditing ? 'EDITAR APOSTA' : 'ADICIONAR APOSTA'}
               </h2>
               <p className="text-[11px] text-zinc-400">
-                Sincronizado com os jogos e favoritos do dia
+                {buildMode === 'auto' && !isEditing
+                  ? 'Configure a automação e monte seus bilhetes em 1 clique'
+                  : 'Sincronizado com os jogos e favoritos do dia'}
               </p>
             </div>
           </div>
           <button
             id="btn-close-bet-modal"
+            type="button"
             onClick={onClose}
-            className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors"
+            className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -1221,12 +1542,50 @@ export const BetModal: React.FC<BetModalProps> = ({
         {/* Modal Form Scrollable */}
         <form onSubmit={handleFormSubmit} className="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1">
           
+          {/* Mode Switcher inside Adicionar Aposta: Manual vs Automação */}
+          {!isEditing && (
+            <div className="grid grid-cols-2 gap-2 p-1 bg-[#17171c] border border-[#282832] rounded-xl">
+              <button
+                type="button"
+                id="btn-mode-manual"
+                onClick={() => setBuildMode('manual')}
+                className={`py-2 px-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  buildMode === 'manual'
+                    ? 'bg-[#252530] text-white border border-zinc-600 shadow-xs'
+                    : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
+                }`}
+              >
+                <Hand className="w-3.5 h-3.5 text-sky-400" />
+                <span>Manual</span>
+              </button>
+
+              <button
+                type="button"
+                id="btn-mode-auto"
+                onClick={() => setBuildMode('auto')}
+                className={`py-2 px-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  buildMode === 'auto'
+                    ? 'bg-emerald-950/60 text-emerald-300 border border-emerald-500/60 shadow-xs'
+                    : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    autoEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'
+                  }`}
+                />
+                <Bot className="w-3.5 h-3.5 text-[#ccff00]" />
+                <span>Configurar Automação</span>
+              </button>
+            </div>
+          )}
+
           {/* Row 1: DATA & CASA DE APOSTAS */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="flex items-center gap-1.5 text-[11px] font-bold text-zinc-300 uppercase tracking-wider mb-1.5">
                 <Calendar className="w-3.5 h-3.5 text-lime-400" />
-                Data do Jogo
+                Data do Bilhete
               </label>
               <input
                 id="input-bet-date"
@@ -1236,6 +1595,29 @@ export const BetModal: React.FC<BetModalProps> = ({
                 required
                 className="w-full bg-[#18181c] border border-[#2c2c34] focus:border-emerald-500 rounded-xl px-3.5 py-2 text-xs text-white outline-none transition-all font-medium"
               />
+              {(() => {
+                const parts = String(date || '').split('-').map((n) => parseInt(n, 10));
+                if (parts.length !== 3 || parts.some((n) => isNaN(n))) return null;
+                const dUtc = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 12, 0, 0));
+                const daysPt = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+                const monthsPt = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+                const readable = `${daysPt[dUtc.getUTCDay()]}, dia ${String(parts[2]).padStart(2, '0')} de ${monthsPt[parts[1] - 1]}`;
+                let createdInfo = '';
+                if (initialBet?.createdAt) {
+                  const ms = Date.parse(initialBet.createdAt);
+                  if (!isNaN(ms)) {
+                    const dp = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' }).format(new Date(ms));
+                    const tp = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
+                    createdInfo = ` • Montado ${dp} às ${tp}`;
+                  }
+                }
+                return (
+                  <p className="mt-1 text-[10px] font-semibold text-zinc-400 flex items-center gap-1">
+                    <Clock className="w-2.5 h-2.5 text-lime-400 shrink-0" />
+                    <span className="truncate">{readable}{createdInfo}</span>
+                  </p>
+                );
+              })()}
             </div>
 
             <div>
@@ -1254,62 +1636,74 @@ export const BetModal: React.FC<BetModalProps> = ({
             </div>
           </div>
 
-          {/* AUTOMATION ENTRY INSIDE ADICIONAR APOSTA */}
-          {!isEditing && onOpenAutoBet && (
-            <div
-              onClick={onOpenAutoBet}
-              className={`px-3 py-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
-                autoBetConfig?.enabled
-                  ? 'bg-emerald-950/30 border-emerald-500/40 hover:border-emerald-400/60'
-                  : 'bg-[#16161c] border-[#2a2a35] hover:border-zinc-600'
-              }`}
-            >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Bot
-                  className={`w-4 h-4 shrink-0 ${
-                    autoBetConfig?.enabled ? 'text-emerald-400' : 'text-zinc-400'
-                  }`}
-                />
-                <div className="flex items-center gap-2 flex-wrap min-w-0">
-                  <span className="text-xs font-black text-white uppercase tracking-tight">
-                    Montagem Automática Diária
-                  </span>
-                  <span
-                    className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
-                      autoBetConfig?.enabled
-                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                        : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
-                    }`}
-                  >
-                    {autoBetConfig?.enabled
-                      ? autoBetConfig.mode === 'home'
-                        ? 'Ativa • Só em Casa'
-                        : 'Ativa • Só Fora'
-                      : 'Desativada'}
-                  </span>
-                </div>
-              </div>
-              <span className="px-2.5 py-1 rounded-lg bg-[#ccff00] text-black text-[10px] font-black uppercase tracking-wider shrink-0">
-                Configurar
-              </span>
-            </div>
-          )}
-
           {/* DYNAMIC SYNC SECTION: JOGOS DOS TIMES FAVORITOS COM FOGUINHO (UNDER 1.5) */}
           <div className="bg-[#151518] border border-[#26262e] rounded-xl p-3 sm:p-4 space-y-3">
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 pb-1 border-b border-[#26262e]">
-              <div className="flex items-center gap-2 flex-wrap text-xs font-extrabold text-amber-400 uppercase tracking-wider">
-                <span className="break-words">
+            <div className="flex flex-col gap-2 pb-2 border-b border-[#26262e]">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-xs font-extrabold text-amber-400 uppercase tracking-wider">
                   Jogos dos Favoritos ({date.split('-').reverse().join('/')})
                 </span>
-                {activeAutoMode && (
-                  <span className="text-[10px] font-black text-[#ccff00] bg-[#ccff00]/10 border border-[#ccff00]/30 px-2 py-0.5 rounded-md normal-case">
-                    {activeAutoMode === 'home' ? 'Só em Casa' : 'Só Fora de Casa'}
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {hiddenMatchesCount > 0 && (
+                    <span
+                      className="text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0"
+                      title={`${hiddenMatchesCount} ${
+                        hiddenMatchesCount === 1 ? 'jogo já utilizado' : 'jogos já utilizados'
+                      } em outros bilhetes desta data foram ocultados para evitar duplicidade no mesmo dia.`}
+                    >
+                      <span>🔒</span>
+                      <span>{hiddenMatchesCount}</span>
+                    </span>
+                  )}
+                  <span className="text-[10px] font-bold text-zinc-400 bg-[#1a1a22] px-2 py-0.5 rounded-full border border-zinc-800 shrink-0">
+                    Total na grade: <strong className="text-white">{totalGradeAvailableCount}</strong>
                   </span>
-                )}
+                  {buildMode === 'manual' ? (
+                    <span className="text-[10px] font-bold text-zinc-300 bg-[#202026] px-2.5 py-0.5 rounded-full border border-zinc-700 shrink-0">
+                      {selectedMatchIds.length}/5 selecionados
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-emerald-300 bg-emerald-950/50 px-2.5 py-0.5 rounded-full border border-emerald-500/40 shrink-0">
+                      {autoEligibleItems.length} {autoEligibleItems.length === 1 ? 'jogo' : 'jogos'} ({modeSummaryLabel})
+                    </span>
+                  )}
+                </div>
               </div>
+
+              {/* Filter Toolbar: Casa | Fora | Foguinho */}
               <div className="flex items-center gap-1.5 flex-wrap">
-                {/* Filtro Foguinho com seletor de quantidade de foguinhos */}
+                <button
+                  type="button"
+                  id="btn-filter-bet-home"
+                  onClick={() => setMandoFilter((prev) => (prev === 'home' ? 'all' : 'home'))}
+                  className={`h-7 px-2.5 rounded-lg text-[11px] font-black flex items-center gap-1.5 transition-all select-none cursor-pointer border ${
+                    mandoFilter === 'home'
+                      ? 'bg-[#ccff00]/15 text-[#ccff00] border-[#ccff00]/70 shadow-xs'
+                      : 'bg-[#1a1a22] text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:border-zinc-700'
+                  }`}
+                  title="Mostrar somente favoritos no método Foguinho jogando em casa"
+                >
+                  <Home className="w-3 h-3" />
+                  <span>Casa</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="btn-filter-bet-away"
+                  onClick={() => setMandoFilter((prev) => (prev === 'away' ? 'all' : 'away'))}
+                  className={`h-7 px-2.5 rounded-lg text-[11px] font-black flex items-center gap-1.5 transition-all select-none cursor-pointer border ${
+                    mandoFilter === 'away'
+                      ? 'bg-[#ccff00]/15 text-[#ccff00] border-[#ccff00]/70 shadow-xs'
+                      : 'bg-[#1a1a22] text-zinc-400 hover:text-zinc-200 border-zinc-800 hover:border-zinc-700'
+                  }`}
+                  title="Mostrar somente favoritos no método Foguinho jogando fora de casa"
+                >
+                  <Plane className="w-3 h-3" />
+                  <span>Fora</span>
+                </button>
+
+                {/* Filtro Foguinho */}
                 <div className="flex items-center gap-1 bg-[#1a1a22] p-0.5 rounded-lg border border-zinc-800">
                   <button
                     type="button"
@@ -1322,18 +1716,17 @@ export const BetModal: React.FC<BetModalProps> = ({
                         return 'foguinho';
                       });
                     }}
-                    className={`h-7 px-2 rounded-md text-xs font-black flex items-center gap-1 transition-all select-none active:scale-95 cursor-pointer border ${
+                    className={`h-6 px-2 rounded-md text-xs font-black flex items-center gap-1 transition-all select-none cursor-pointer border ${
                       quickFilter === 'foguinho'
                         ? 'bg-amber-950/70 text-amber-300 border-amber-500 shadow-sm shadow-amber-500/25'
                         : 'bg-transparent text-zinc-400 hover:text-zinc-200 border-transparent hover:bg-[#22222b]'
                     }`}
-                    title="Filtrar por método do Foguinho (🔥 Under 1.5)"
+                    title="Filtrar por quantidade de foguinhos (🔥 Under 1.5)"
                   >
                     <span>🔥</span>
                     <span className="text-[10px] font-bold">Foguinho</span>
                   </button>
 
-                  {/* Seletor específico da quantidade de foguinhos (1, 2 ou 3+) */}
                   {quickFilter === 'foguinho' && (
                     <div className="flex items-center gap-0.5 pl-1 border-l border-zinc-700/60 animate-fade-in">
                       {[
@@ -1346,7 +1739,7 @@ export const BetModal: React.FC<BetModalProps> = ({
                           key={opt.count}
                           type="button"
                           onClick={() => setFireCountFilter(opt.count)}
-                          className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition-all cursor-pointer ${
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold transition-all cursor-pointer ${
                             fireCountFilter === opt.count
                               ? 'bg-amber-400 text-black shadow-xs'
                               : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
@@ -1358,21 +1751,6 @@ export const BetModal: React.FC<BetModalProps> = ({
                     </div>
                   )}
                 </div>
-
-                {hiddenMatchesCount > 0 && (
-                  <span
-                    className="text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full flex items-center gap-1 shrink-0"
-                    title={`${hiddenMatchesCount} ${
-                      hiddenMatchesCount === 1 ? 'jogo já utilizado' : 'jogos já utilizados'
-                    } em outros bilhetes desta data foram ocultados para evitar duplicidade no mesmo dia.`}
-                  >
-                    <span>🔒</span>
-                    <span>{hiddenMatchesCount}</span>
-                  </span>
-                )}
-                <span className="text-[10px] font-bold text-zinc-300 bg-[#202026] px-2.5 py-1 rounded-full border border-zinc-700 shrink-0">
-                  {selectedMatchIds.length}/5 selecionados
-                </span>
               </div>
             </div>
 
@@ -1408,19 +1786,18 @@ export const BetModal: React.FC<BetModalProps> = ({
                           ? 'Nenhum clube favorito com sequência de 2 foguinhos para esta data.'
                           : 'Nenhum clube favorito com sequência de 3+ foguinhos para esta data.'}
                       </span>
-                    ) : activeAutoMode ? (
-                      <span>
-                        Nenhum favorito {activeAutoMode === 'home' ? 'jogando em casa' : 'jogando fora de casa'} encontrado para esta data.
-                      </span>
+                    ) : mandoFilter === 'home' ? (
+                      <span>Nenhum favorito com status Foguinho jogando em casa nesta data.</span>
+                    ) : mandoFilter === 'away' ? (
+                      <span>Nenhum favorito com status Foguinho jogando fora de casa nesta data.</span>
                     ) : (
                       <span>Nenhum clube favorito com status Foguinho para esta data.</span>
                     )}
                   </div>
                 )}
               </div>
-            ) : (
+            ) : buildMode === 'manual' ? (
               <div className="space-y-2">
-
                 <div className="grid grid-cols-1 gap-2 max-h-64 overflow-y-auto pr-1">
                   {displayedMatchItems.map((item, idx) => (
                     <MatchSelectionRow
@@ -1434,16 +1811,255 @@ export const BetModal: React.FC<BetModalProps> = ({
                   ))}
                 </div>
               </div>
+            ) : (
+              /* AUTOMATION MODE PANEL INSIDE ADICIONAR APOSTA */
+              <div className="space-y-3">
+                {/* Grade Detection Banner */}
+                <div className="px-3 py-2 rounded-xl bg-[#121a16] border border-emerald-500/30 flex items-center justify-between gap-2 flex-wrap">
+                  <div className="text-[11px] text-zinc-200 font-semibold">
+                    <span className="text-[#ccff00] font-black">{autoEligibleItems.length}</span>{' '}
+                    {autoEligibleItems.length === 1 ? 'jogo disponível' : 'jogos disponíveis'} {modeSummaryLabel}
+                    <span className="text-zinc-500 mx-1.5">•</span>
+                    <span className="text-emerald-300 font-bold">
+                      Dá para montar até {maxPossibleAutoTickets}{' '}
+                      {maxPossibleAutoTickets === 1 ? 'bilhete' : 'bilhetes'} de{' '}
+                      {autoGamesPerTicket} {autoGamesPerTicket === 1 ? 'jogo' : 'jogos'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Automation Config Controls */}
+                <div className="bg-[#18181f] border border-[#2b2b36] rounded-xl p-3 space-y-3">
+                  {/* Toggle Automação Diária Ativa */}
+                  <div
+                    onClick={() => setAutoEnabled((prev) => !prev)}
+                    className={`px-3 py-2 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                      autoEnabled
+                        ? 'bg-emerald-950/30 border-emerald-500/50'
+                        : 'bg-[#141418] border-[#272730] hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`w-2 h-2 rounded-full shrink-0 ${
+                          autoEnabled ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'
+                        }`}
+                      />
+                      <div>
+                        <span className="block text-[11px] font-black text-white uppercase tracking-wide">
+                          {autoEnabled ? 'Automação Diária Ativa' : 'Automação Diária Desativada'}
+                        </span>
+                        <span className="block text-[10px] text-zinc-400">
+                          {autoEnabled
+                            ? 'Também monta automaticamente todos os dias com estes critérios'
+                            : 'Monta somente quando você clicar em Automatizar'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={autoEnabled}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setAutoEnabled((prev) => !prev);
+                      }}
+                      className={`w-10 h-5 rounded-full transition-colors p-0.5 shrink-0 cursor-pointer ${
+                        autoEnabled ? 'bg-emerald-500' : 'bg-zinc-700'
+                      }`}
+                    >
+                      <div
+                        className={`w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                          autoEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Mercado dos Bilhetes Automáticos */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
+                      Mercado dos Bilhetes
+                    </label>
+                    <select
+                      id="select-auto-market"
+                      value={autoMarket}
+                      onChange={(e) => setAutoMarket(e.target.value as AutoBetMarketOption)}
+                      className="w-full bg-[#111114] border border-[#2c2c35] focus:border-emerald-500 rounded-lg px-2.5 py-1.5 text-xs text-white font-semibold outline-none cursor-pointer"
+                    >
+                      <option value="OVER_1_5">Mais de 1.5 gols</option>
+                      <option value="FAV_WIN">Vitória do Favorito</option>
+                      <option value="FAV_DC">Dupla Chance do Favorito</option>
+                    </select>
+                  </div>
+
+                  {/* Times por Bilhete (1, 2 ou máx 3) & Quantidade de Bilhetes */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1.5">
+                        Times por Bilhete (Máx. 3)
+                      </label>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {[1, 2, 3].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            id={`btn-auto-games-${n}`}
+                            onClick={() => setAutoGamesPerTicket(n)}
+                            className={`py-1.5 px-2 rounded-lg text-[11px] font-black border transition-all cursor-pointer ${
+                              autoGamesPerTicket === n
+                                ? 'bg-[#ccff00]/15 text-[#ccff00] border-[#ccff00]/70'
+                                : 'bg-[#121216] text-zinc-400 border-[#292933] hover:text-zinc-200'
+                            }`}
+                          >
+                            {n} {n === 1 ? 'jogo' : 'jogos'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
+                          Qtd. de Bilhetes
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setAutoTicketCountMode('auto')}
+                          className={`text-[9.5px] font-black px-1.5 py-0.5 rounded border cursor-pointer transition-all ${
+                            autoTicketCountMode === 'auto'
+                              ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                              : 'bg-[#121216] text-zinc-400 border-zinc-700 hover:text-white'
+                          }`}
+                        >
+                          Máx ({maxPossibleAutoTickets})
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.max(1, effectiveAutoTicketCount - 1);
+                            setAutoTicketCountMode('custom');
+                            setAutoCustomTicketCount(next);
+                          }}
+                          disabled={effectiveAutoTicketCount <= 1}
+                          className="w-8 h-8 rounded-lg bg-[#121216] border border-[#292933] hover:border-zinc-600 text-zinc-300 flex items-center justify-center cursor-pointer disabled:opacity-40"
+                        >
+                          <Minus className="w-3.5 h-3.5" />
+                        </button>
+                        <input
+                          id="input-auto-ticket-count"
+                          type="number"
+                          min={1}
+                          max={Math.max(1, maxPossibleAutoTickets)}
+                          value={effectiveAutoTicketCount}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            if (!isNaN(v)) {
+                              setAutoTicketCountMode('custom');
+                              setAutoCustomTicketCount(
+                                Math.max(1, Math.min(Math.max(1, maxPossibleAutoTickets), v))
+                              );
+                            }
+                          }}
+                          className="flex-1 bg-[#111114] border border-[#2c2c35] focus:border-emerald-500 rounded-lg py-1.5 text-center text-xs text-white font-black outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = Math.min(maxPossibleAutoTickets, effectiveAutoTicketCount + 1);
+                            setAutoTicketCountMode(
+                              next >= maxPossibleAutoTickets ? 'auto' : 'custom'
+                            );
+                            setAutoCustomTicketCount(next);
+                          }}
+                          disabled={effectiveAutoTicketCount >= maxPossibleAutoTickets}
+                          className="w-8 h-8 rounded-lg bg-[#121216] border border-[#292933] hover:border-zinc-600 text-zinc-300 flex items-center justify-center cursor-pointer disabled:opacity-40"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live Preview of Tickets to Generate */}
+                {plannedAutoChunks.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[10.5px]">
+                      <span className="font-black text-zinc-300 uppercase tracking-wider">
+                        Prévia dos Bilhetes ({plannedAutoChunks.length})
+                      </span>
+                      <span className="font-bold text-emerald-400">
+                        {plannedBreakdownSummary}
+                      </span>
+                    </div>
+                    <div className="max-h-44 overflow-y-auto space-y-1.5 pr-1">
+                      {plannedAutoChunks.map((chunk, cIdx) => (
+                        <div
+                          key={`preview-ticket-${cIdx}`}
+                          className="p-2.5 rounded-xl bg-[#1a1a22] border border-[#2d2d3a] space-y-1.5"
+                        >
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="font-black text-[#ccff00] uppercase tracking-wider">
+                              Bilhete {cIdx + 1} • {chunk.length > 1 ? 'Múltipla' : 'Simples'}
+                            </span>
+                            <span className="text-zinc-400 font-bold">
+                              {chunk.length} {chunk.length === 1 ? 'time' : 'times'}
+                            </span>
+                          </div>
+                          <div className="space-y-1">
+                            {chunk.map((item, mIdx) => {
+                              const m = item.match;
+                              return (
+                                <div
+                                  key={`${m.id}_${mIdx}`}
+                                  className="flex items-center justify-between gap-2 text-[11px] bg-[#131318] px-2 py-1 rounded-lg border border-[#24242e]"
+                                >
+                                  <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                    <span className="text-[10px] text-zinc-500 font-bold shrink-0">
+                                      {m.time || '16:00'}
+                                    </span>
+                                    <span className={item.isFav1 ? 'text-[#ccff00] font-black truncate' : 'text-zinc-200 truncate'}>
+                                      {m.team1}
+                                    </span>
+                                    <span className="text-zinc-500 text-[10px] shrink-0">x</span>
+                                    <span className={item.isFav2 ? 'text-[#ccff00] font-black truncate' : 'text-zinc-200 truncate'}>
+                                      {m.team2}
+                                    </span>
+                                  </div>
+                                  <span className="text-[9.5px] font-black text-amber-400 shrink-0">
+                                    {Math.max(
+                                      mandoFilter === 'away' ? 0 : item.streakFire1,
+                                      mandoFilter === 'home' ? 0 : item.streakFire2
+                                    )}🔥
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
-          {/* Box: SELEÇÕES DA APOSTA (Exibição limpa, compacta e sem redundância) */}
-          {legs.length > 0 && (
+          {/* Box: SELEÇÕES DA APOSTA (Manual Mode or Editing) */}
+          {(buildMode === 'manual' || isEditing) && legs.length > 0 && (
             <div className="bg-[#151519] border border-[#272732] rounded-xl p-3 sm:p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-1.5 text-xs font-black text-amber-400 uppercase tracking-wider">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-xs font-black text-amber-400 uppercase tracking-wider">
                   <span>⚡</span>
-                  <span>Seleções da Aposta ({legs.length} {legs.length === 1 ? 'partida' : 'partidas'})</span>
+                  <span>Seleções ({legs.length})</span>
+                  <span className="px-2 py-0.5 rounded bg-[#202028] border border-zinc-700 text-[9px] font-bold text-zinc-300">
+                    {format}
+                  </span>
                 </div>
                 <button
                   type="button"
@@ -1454,7 +2070,7 @@ export const BetModal: React.FC<BetModalProps> = ({
                   }}
                   className="text-[10px] text-zinc-400 hover:text-white transition-colors cursor-pointer"
                 >
-                  Limpar seleção
+                  Limpar
                 </button>
               </div>
 
@@ -1466,9 +2082,9 @@ export const BetModal: React.FC<BetModalProps> = ({
                       key={`${leg.id || leg.matchId || 'leg'}_${idx}`}
                       leg={leg}
                       idx={idx}
+                      isEditing={isEditing}
                       options={options}
                       onMarketChange={handleMarketChange}
-                      onTimeChange={handleTimeChange}
                       onLegStatusChange={handleLegStatusChange}
                       onRemoveLeg={handleRemoveLeg}
                     />
@@ -1478,13 +2094,13 @@ export const BetModal: React.FC<BetModalProps> = ({
             </div>
           )}
 
-          {/* DADOS DA APOSTA */}
+          {/* DADOS ESSENCIAIS DA APOSTA (Simplificado: Odd & Valor) */}
           <div className="bg-[#17171b] border border-[#2a2a32] rounded-xl p-3.5 sm:p-4 space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               {/* ODD */}
               <div>
                 <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                  Cotação (ODD)
+                  {buildMode === 'auto' && !isEditing ? 'Odd Padrão (p/ bilhete)' : 'Cotação (ODD)'}
                 </label>
                 <input
                   id="input-bet-odd"
@@ -1501,10 +2117,10 @@ export const BetModal: React.FC<BetModalProps> = ({
               {/* Valor da Aposta */}
               <div>
                 <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                  Valor da Aposta
+                  {buildMode === 'auto' && !isEditing ? 'Valor p/ Bilhete (R$)' : 'Valor (R$)'}
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-black text-zinc-500">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-zinc-500">
                     R$
                   </span>
                   <input
@@ -1515,104 +2131,31 @@ export const BetModal: React.FC<BetModalProps> = ({
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
                     required
-                    className="w-full bg-[#111113] border border-[#2d2d35] focus:border-emerald-500 rounded-xl pl-10 pr-4 py-2 text-xs text-white font-bold outline-none transition-all"
+                    className="w-full bg-[#111113] border border-[#2d2d35] focus:border-emerald-500 rounded-xl pl-9 pr-3 py-2 text-xs text-white font-bold outline-none transition-all"
                   />
                 </div>
               </div>
-
-              {/* Formato */}
-              <div>
-                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                  Formato
-                </label>
-                <div className="grid grid-cols-2 gap-1.5 h-[38px]">
-                  <button
-                    type="button"
-                    onClick={() => setFormat('Simples')}
-                    className={`rounded-xl text-xs font-bold transition-all border cursor-pointer ${
-                      format === 'Simples'
-                        ? 'bg-purple-950/60 border-purple-500 text-purple-200'
-                        : 'bg-[#111113] border-[#2d2d35] text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Simples
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFormat('Múltipla')}
-                    className={`rounded-xl text-xs font-bold transition-all border cursor-pointer ${
-                      format === 'Múltipla'
-                        ? 'bg-blue-950/60 border-blue-500 text-blue-200'
-                        : 'bg-[#111113] border-[#2d2d35] text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Múltipla
-                  </button>
-                </div>
-              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-[#25252e]">
-              <div>
+            {isEditing && legs.length === 0 && (
+              <div className="pt-2 border-t border-[#25252e]">
                 <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                  Esporte
+                  Status da Aposta
                 </label>
                 <select
-                  id="select-bet-sport"
-                  value={sport}
-                  onChange={(e) => setSport(e.target.value)}
-                  className="w-full bg-[#111113] border border-[#2d2d35] focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none cursor-pointer font-medium"
+                  id="select-bet-status"
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as BetStatus)}
+                  className="w-full bg-[#111113] border border-[#2d2d35] focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none cursor-pointer font-bold"
                 >
-                  <option value="Futebol">⚽ Futebol</option>
-                  <option value="Basquete">🏀 Basquete</option>
-                  <option value="Tênis">🎾 Tênis</option>
-                  <option value="E-Sports">🎮 E-Sports</option>
-                  <option value="Vôlei">🏐 Vôlei</option>
-                  <option value="MMA / UFC">🥊 MMA / UFC</option>
-                  <option value="Outros">🎯 Outros</option>
+                  <option value="Pendente">⏳ Pendente</option>
+                  <option value="Ganha">✅ Ganha</option>
+                  <option value="Perdida">❌ Perdida</option>
+                  <option value="Reembolsada">🔄 Reembolsada</option>
+                  <option value="Cancelada">🚫 Cancelada</option>
                 </select>
               </div>
-
-              <div>
-                <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1">
-                  Estado Geral (Status)
-                </label>
-                {legs.length > 0 ? (
-                  <div className="w-full bg-[#111113] border border-[#2d2d35] rounded-xl px-3 py-2 text-xs flex items-center justify-between">
-                    <span className={`font-bold flex items-center gap-1.5 ${
-                      status === 'Ganha'
-                        ? 'text-emerald-400'
-                        : status === 'Perdida'
-                        ? 'text-rose-400'
-                        : status === 'Reembolsada'
-                        ? 'text-zinc-300'
-                        : 'text-amber-400'
-                    }`}>
-                      {status === 'Ganha' && '✅ Ganha'}
-                      {status === 'Perdida' && '❌ Perdida'}
-                      {status === 'Reembolsada' && '🔄 Reembolsada'}
-                      {status === 'Pendente' && '⏳ Pendente'}
-                    </span>
-                    <span className="text-[9px] text-zinc-500 font-semibold uppercase">
-                      Automático
-                    </span>
-                  </div>
-                ) : (
-                  <select
-                    id="select-bet-status"
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value as BetStatus)}
-                    className="w-full bg-[#111113] border border-[#2d2d35] focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none cursor-pointer font-bold"
-                  >
-                    <option value="Pendente">⏳ Pendente</option>
-                    <option value="Ganha">✅ Ganha</option>
-                    <option value="Perdida">❌ Perdida</option>
-                    <option value="Reembolsada">🔄 Reembolsada</option>
-                    <option value="Cancelada">🚫 Cancelada</option>
-                  </select>
-                )}
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Green Box: SOMA AUTOMÁTICA (RETORNO) & LUCRO AUTOMÁTICO */}
@@ -1623,35 +2166,54 @@ export const BetModal: React.FC<BetModalProps> = ({
               </div>
               <div>
                 <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
-                  RETORNO POTENCIAL
+                  {buildMode === 'auto' && !isEditing && plannedAutoChunks.length > 1
+                    ? `RETORNO TOTAL (${plannedAutoChunks.length} BILHETES)`
+                    : 'RETORNO POTENCIAL'}
                 </span>
                 <span className="text-sm sm:text-base font-black text-[#ccff00] font-sans">
-                  {potentialReturn.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} R$
+                  {(
+                    buildMode === 'auto' && !isEditing && plannedAutoChunks.length > 1
+                      ? potentialReturn * plannedAutoChunks.length
+                      : potentialReturn
+                  ).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{' '}
+                  R$
                 </span>
               </div>
             </div>
 
             <div className="text-right">
               <span className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider">
-                LUCRO ESTIMADO
+                {buildMode === 'auto' && !isEditing && plannedAutoChunks.length > 1
+                  ? 'INVESTIMENTO TOTAL'
+                  : 'LUCRO ESTIMADO'}
               </span>
-              <span
-                className={`text-sm sm:text-base font-black font-sans ${
-                  status === 'Ganha'
-                    ? 'text-emerald-400'
-                    : status === 'Perdida'
-                    ? 'text-rose-400'
-                    : 'text-zinc-400'
-                }`}
-              >
-                {status === 'Ganha' && '+'}
-                {calculatedProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} R$
-              </span>
+              {buildMode === 'auto' && !isEditing && plannedAutoChunks.length > 1 ? (
+                <span className="text-sm sm:text-base font-black font-sans text-zinc-200">
+                  {(parsedAmount * plannedAutoChunks.length).toLocaleString('pt-BR', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  R$
+                </span>
+              ) : (
+                <span
+                  className={`text-sm sm:text-base font-black font-sans ${
+                    status === 'Ganha'
+                      ? 'text-emerald-400'
+                      : status === 'Perdida'
+                      ? 'text-rose-400'
+                      : 'text-zinc-400'
+                  }`}
+                >
+                  {status === 'Ganha' && '+'}
+                  {calculatedProfit.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} R$
+                </span>
+              )}
             </div>
           </div>
 
           {/* Footer Actions */}
-          <div className="pt-2 flex items-center justify-between gap-2 border-t border-[#222226] shrink-0">
+          <div className="pt-2 flex items-center justify-between gap-2 border-t border-[#222226] shrink-0 flex-wrap">
             {isEditing && onDelete ? (
               <button
                 type="button"
@@ -1669,11 +2231,22 @@ export const BetModal: React.FC<BetModalProps> = ({
                   {deleteConfirm ? 'Confirmar?' : 'Excluir'}
                 </span>
               </button>
+            ) : buildMode === 'auto' ? (
+              <button
+                type="button"
+                id="btn-save-auto-config-only"
+                onClick={handleSaveAutoConfigOnly}
+                disabled={isSavingAutoConfig}
+                className="px-3 py-2 rounded-xl text-[11px] font-bold text-emerald-300 hover:text-white bg-emerald-950/30 hover:bg-emerald-950/60 border border-emerald-500/30 transition-all cursor-pointer disabled:opacity-50"
+                title="Salvar apenas a configuração da automação diária"
+              >
+                {isSavingAutoConfig ? 'Salvando...' : 'Salvar Config'}
+              </button>
             ) : (
               <div />
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 ml-auto">
               <button
                 type="button"
                 id="btn-cancel-bet"
@@ -1683,13 +2256,34 @@ export const BetModal: React.FC<BetModalProps> = ({
                 Cancelar
               </button>
 
-              <button
-                type="submit"
-                id="btn-submit-bet"
-                className="px-4 sm:px-5 py-2 rounded-xl text-xs font-black text-black bg-[#ccff00] hover:bg-[#b8e600] active:scale-98 shadow-md transition-all cursor-pointer uppercase tracking-wider font-sans"
-              >
-                {isEditing ? 'SALVAR' : 'ADICIONAR'}
-              </button>
+              {!isEditing && buildMode === 'auto' ? (
+                <button
+                  type="button"
+                  id="btn-automate-tickets"
+                  onClick={handleAutomateTickets}
+                  disabled={isAutomating || plannedAutoChunks.length === 0}
+                  className="px-4 sm:px-5 py-2 rounded-xl text-xs font-black text-black bg-[#ccff00] hover:bg-[#b8e600] active:scale-98 shadow-md transition-all cursor-pointer uppercase tracking-wider font-sans flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>
+                    {isAutomating
+                      ? 'Montando...'
+                      : plannedAutoChunks.length > 0
+                      ? `AUTOMATIZAR (${plannedAutoChunks.length} ${
+                          plannedAutoChunks.length === 1 ? 'BILHETE' : 'BILHETES'
+                        })`
+                      : 'SEM JOGOS NA GRADE'}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  id="btn-submit-bet"
+                  className="px-4 sm:px-5 py-2 rounded-xl text-xs font-black text-black bg-[#ccff00] hover:bg-[#b8e600] active:scale-98 shadow-md transition-all cursor-pointer uppercase tracking-wider font-sans"
+                >
+                  {isEditing ? 'SALVAR' : 'ADICIONAR'}
+                </button>
+              )}
             </div>
           </div>
 

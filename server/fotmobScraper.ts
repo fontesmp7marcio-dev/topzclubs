@@ -376,23 +376,28 @@ export async function scrapeFotMobLeague(leagueId: number, slug: string, forceRe
       }
 
       const matches = rawMatches.map((m: any, idx: number) => {
-        let score: { ft?: [number, number]; ht?: [number, number] } | null = null;
-        if (m.status?.scoreStr) {
-          const parts = m.status.scoreStr.split('-').map((s: string) => parseInt(s.trim()));
-          if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-            score = { ft: [parts[0], parts[1]] };
-          }
-        } else if (typeof m.home?.score === 'number' && typeof m.away?.score === 'number') {
-          score = { ft: [m.home.score, m.away.score] };
-        }
-
-        let status: 'finished' | 'live' | 'scheduled' | 'postponed' | 'halftime' = 'scheduled';
-        if (m.status?.cancelled || m.status?.reason?.short === 'Canc' || m.status?.reason?.short === 'Postp' || m.status?.reason?.short === 'Adia' || m.status?.reason?.short === 'Susp') {
+        let status: 'finished' | 'live' | 'scheduled' | 'postponed' | 'cancelled' | 'halftime' = 'scheduled';
+        const shortReason = String(m.status?.reason?.short || '').toLowerCase();
+        if (m.status?.cancelled || shortReason === 'canc' || shortReason === 'can' || shortReason === 'aband') {
+          status = 'cancelled';
+        } else if (shortReason === 'postp' || shortReason === 'adia' || shortReason === 'susp') {
           status = 'postponed';
-        } else if (m.status?.finished || m.status?.reason?.short === 'FT' || m.status?.reason?.short === 'Pen' || m.status?.reason?.short === 'AET') {
+        } else if (m.status?.finished || shortReason === 'ft' || shortReason === 'pen' || shortReason === 'aet') {
           status = 'finished';
         } else if (m.status?.started && !m.status?.finished) {
           status = 'live';
+        }
+
+        let score: { ft?: [number, number]; ht?: [number, number] } | null = null;
+        if (status !== 'scheduled' && status !== 'cancelled' && status !== 'postponed') {
+          if (m.status?.scoreStr) {
+            const parts = m.status.scoreStr.split('-').map((s: string) => parseInt(s.trim()));
+            if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+              score = { ft: [parts[0], parts[1]] };
+            }
+          } else if (typeof m.home?.score === 'number' && typeof m.away?.score === 'number') {
+            score = { ft: [m.home.score, m.away.score] };
+          }
         }
 
         const utcTime = m.status?.utcTime || '';
@@ -936,7 +941,10 @@ export async function scrapeFotMobMatchesByDate(dateStr: string): Promise<any[]>
   const cached = memoryCache.get(cacheKey);
   const todayClean = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()).replace(/-/g, '');
   const isPastDate = cleanDate < todayClean;
-  const cacheTTL = isPastDate ? 12 * 60 * 60 * 1000 : 2.5 * 60 * 1000;
+  const hasUnsettledCached =
+    Array.isArray(cached?.data) &&
+    cached.data.some((m: any) => m.status === 'live' || m.status === 'scheduled');
+  const cacheTTL = isPastDate && !hasUnsettledCached ? 12 * 60 * 60 * 1000 : 2.5 * 60 * 1000;
   if (cached && Date.now() - cached.timestamp < cacheTTL) {
     return cached.data;
   }
@@ -976,20 +984,26 @@ export async function scrapeFotMobMatchesByDate(dateStr: string): Promise<any[]>
         }
         
         for (const m of (l.matches || [])) {
-          let status: 'scheduled' | 'live' | 'finished' | 'postponed' = 'scheduled';
+          let status: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled' = 'scheduled';
+          const shortReason = String(m.status?.reason?.short || '').toLowerCase();
           if (
             m.status?.cancelled ||
-            m.status?.reason?.short === 'Canc' ||
-            m.status?.reason?.short === 'Postp' ||
-            m.status?.reason?.short === 'Adia' ||
-            m.status?.reason?.short === 'Susp'
+            shortReason === 'canc' ||
+            shortReason === 'can' ||
+            shortReason === 'aband'
+          ) {
+            status = 'cancelled';
+          } else if (
+            shortReason === 'postp' ||
+            shortReason === 'adia' ||
+            shortReason === 'susp'
           ) {
             status = 'postponed';
           } else if (
             m.status?.finished ||
-            m.status?.reason?.short === 'FT' ||
-            m.status?.reason?.short === 'Pen' ||
-            m.status?.reason?.short === 'AET'
+            shortReason === 'ft' ||
+            shortReason === 'pen' ||
+            shortReason === 'aet'
           ) {
             status = 'finished';
           } else if (m.status?.started && !m.status?.finished) {
@@ -997,21 +1011,23 @@ export async function scrapeFotMobMatchesByDate(dateStr: string): Promise<any[]>
           }
 
           let score = null;
-          if (m.status?.scoreStr) {
-            const parts = m.status.scoreStr.split(/\s*[-:×x]\s*/);
-            if (parts.length === 2) {
-              const h = parseInt(parts[0], 10);
-              const a = parseInt(parts[1], 10);
+          if (status !== 'scheduled' && status !== 'cancelled' && status !== 'postponed') {
+            if (m.status?.scoreStr) {
+              const parts = m.status.scoreStr.split(/\s*[-:×x]\s*/);
+              if (parts.length === 2) {
+                const h = parseInt(parts[0], 10);
+                const a = parseInt(parts[1], 10);
+                if (!isNaN(h) && !isNaN(a)) {
+                  score = { ft: [h, a] };
+                }
+              }
+            }
+            if (!score && m.home?.score !== undefined && m.away?.score !== undefined) {
+              const h = Number(m.home.score);
+              const a = Number(m.away.score);
               if (!isNaN(h) && !isNaN(a)) {
                 score = { ft: [h, a] };
               }
-            }
-          }
-          if (!score && m.home?.score !== undefined && m.away?.score !== undefined) {
-            const h = Number(m.home.score);
-            const a = Number(m.away.score);
-            if (!isNaN(h) && !isNaN(a)) {
-              score = { ft: [h, a] };
             }
           }
 
@@ -1205,4 +1221,136 @@ async function generateDynamicFallbackMatches(dateStr: string): Promise<any[]> {
     return [];
   }
 }
+
+export async function scrapeFotMobMatchById(matchId: string, forceRefresh = false): Promise<any | null> {
+  const cleanId = String(matchId || '').trim();
+  if (!/^\d+$/.test(cleanId)) return null;
+
+  const cacheKey = `fotmob:match-by-id:${cleanId}`;
+  const cached = memoryCache.get(cacheKey);
+  if (!forceRefresh && cached) {
+    const isTerminal =
+      cached.data?.status === 'finished' || cached.data?.status === 'cancelled';
+    const ttl = isTerminal ? 12 * 60 * 60 * 1000 : 2 * 60 * 1000;
+    if (Date.now() - cached.timestamp < ttl) {
+      return cached.data;
+    }
+  }
+
+  if (inFlightRequests.has(cacheKey)) {
+    return inFlightRequests.get(cacheKey)!;
+  }
+
+  const fetchPromise = (async () => {
+    const url = `https://www.fotmob.com/api/data/matchDetails?matchId=${cleanId}`;
+    try {
+      const res = await fetchWithTimeout(url, { headers: HEADERS }, 7000);
+      if (!res.ok) {
+        return cached?.data || null;
+      }
+
+      const data = await res.json();
+      const header = data?.header || {};
+      const general = data?.general || {};
+      const st = header.status || {};
+      const teams = Array.isArray(header.teams) ? header.teams : [];
+      const home = teams[0] || general.homeTeam || {};
+      const away = teams[1] || general.awayTeam || {};
+
+      const shortReason = String(st?.reason?.short || '').toLowerCase().trim();
+      let status: 'scheduled' | 'live' | 'finished' | 'postponed' | 'cancelled' = 'scheduled';
+
+      if (
+        st?.cancelled ||
+        shortReason === 'canc' ||
+        shortReason === 'can' ||
+        shortReason === 'aband'
+      ) {
+        status = 'cancelled';
+      } else if (
+        shortReason === 'postp' ||
+        shortReason === 'adia' ||
+        shortReason === 'susp'
+      ) {
+        status = 'postponed';
+      } else if (
+        st?.finished ||
+        shortReason === 'ft' ||
+        shortReason === 'pen' ||
+        shortReason === 'aet'
+      ) {
+        status = 'finished';
+      } else if (st?.started && !st?.finished) {
+        status = 'live';
+      }
+
+      let score: { ft: [number, number] } | null = null;
+      if (status === 'live' || status === 'finished') {
+        if (typeof st?.scoreStr === 'string') {
+          const parts = st.scoreStr.split(/\s*[-:×x]\s*/);
+          if (parts.length === 2) {
+            const h = parseInt(parts[0], 10);
+            const a = parseInt(parts[1], 10);
+            if (!isNaN(h) && !isNaN(a)) {
+              score = { ft: [h, a] };
+            }
+          }
+        }
+        if (!score && typeof home?.score === 'number' && typeof away?.score === 'number') {
+          score = { ft: [Number(home.score), Number(away.score)] };
+        }
+      }
+
+      let date = '';
+      let time = '16:00';
+      const utcTime = st?.utcTime || general?.matchTimeUTCDate;
+      if (utcTime) {
+        const dt = new Date(utcTime);
+        if (!isNaN(dt.getTime())) {
+          date = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'America/Sao_Paulo',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(dt);
+          time = dt.toLocaleTimeString('pt-BR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZone: 'America/Sao_Paulo',
+          });
+        }
+      }
+
+      const mapped = {
+        id: cleanId,
+        date,
+        time,
+        utcTime: utcTime || undefined,
+        team1: home?.name || 'Time Mandante',
+        team2: away?.name || 'Time Visitante',
+        team1Id: home?.id ? Number(home.id) : undefined,
+        team2Id: away?.id ? Number(away.id) : undefined,
+        score,
+        status,
+        liveMinute: st?.liveTime?.short || undefined,
+        leagueId: general?.leagueId ? Number(general.leagueId) : undefined,
+        leagueName: general?.leagueName || 'Liga',
+        round: general?.matchRound ? String(general.matchRound) : undefined,
+      };
+
+      memoryCache.set(cacheKey, { data: mapped, timestamp: Date.now() });
+      return mapped;
+    } catch {
+      return cached?.data || null;
+    }
+  })();
+
+  inFlightRequests.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    inFlightRequests.delete(cacheKey);
+  }
+}
+
 

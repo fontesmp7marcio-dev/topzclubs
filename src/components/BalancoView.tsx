@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   BarChart3,
   Plus,
@@ -22,6 +22,7 @@ import {
   Bot,
   Home,
   Plane,
+  Clock,
 } from 'lucide-react';
 import { AutoBetConfig, BetItem, BetStatus, Match, MatchFilters, MatchItem } from '../types';
 import { BetModal } from './BetModal';
@@ -45,6 +46,7 @@ interface DayGroup {
   dayKey: string;
   dayLabel: string;
   dayProfit: number;
+  latestCreatedAtMs: number;
   items: BetItem[];
 }
 
@@ -54,6 +56,465 @@ interface MonthGroup {
   monthProfit: number;
   days: Record<string, DayGroup>;
 }
+
+function normalizeBetDate(dateStr?: string): string {
+  if (!dateStr) return '';
+  const trimmed = String(dateStr).trim();
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+  const brMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (brMatch) {
+    const year = brMatch[3].length === 2 ? `20${brMatch[3]}` : brMatch[3];
+    return `${year}-${brMatch[2].padStart(2, '0')}-${brMatch[1].padStart(2, '0')}`;
+  }
+  return trimmed;
+}
+
+function getBetCreatedAtMs(bet: BetItem): number {
+  if (bet.createdAt) {
+    const parsed = Date.parse(bet.createdAt);
+    if (!isNaN(parsed)) return parsed;
+  }
+  const match = String(bet.id || '').match(/bet-(\d{10,14})/);
+  if (match) {
+    const ts = parseInt(match[1], 10);
+    if (!isNaN(ts)) return ts;
+  }
+  const norm = normalizeBetDate(bet.date);
+  const dateMs = norm ? Date.parse(`${norm}T12:00:00Z`) : NaN;
+  return isNaN(dateMs) ? 0 : dateMs;
+}
+
+function formatBetCreatedAt(bet: BetItem): string | null {
+  let ms = 0;
+  if (bet.createdAt) {
+    const parsed = Date.parse(bet.createdAt);
+    if (!isNaN(parsed)) ms = parsed;
+  }
+  if (!ms) {
+    const match = String(bet.id || '').match(/bet-(\d{10,14})/);
+    if (match) {
+      const ts = parseInt(match[1], 10);
+      if (!isNaN(ts)) ms = ts;
+    }
+  }
+  if (!ms) return null;
+  try {
+    const datePart = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+    }).format(new Date(ms));
+    const timePart = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(ms));
+    return `${datePart} às ${timePart}`;
+  } catch {
+    return null;
+  }
+}
+
+interface BetCardRowProps {
+  bet: BetItem;
+  isMenuOpen: boolean;
+  isStatsExpanded: boolean;
+  isMatchesExpanded: boolean;
+  isNewlyAdded: boolean;
+  teamRawMatches?: Record<string | number, MatchItem[]>;
+  dateMatches?: Match[];
+  onToggleMatches: (betId: string) => void;
+  onToggleStats: (betId: string) => void;
+  onToggleMenu: (betId: string) => void;
+  onCloseMenu: () => void;
+  onEditBet: (bet: BetItem) => void;
+  onDeleteBet: (betId: string) => void;
+}
+
+const BetCardRow = React.memo<BetCardRowProps>(({
+  bet,
+  isMenuOpen,
+  isStatsExpanded,
+  isMatchesExpanded,
+  isNewlyAdded,
+  teamRawMatches,
+  dateMatches,
+  onToggleMatches,
+  onToggleStats,
+  onToggleMenu,
+  onCloseMenu,
+  onEditBet,
+  onDeleteBet,
+}) => {
+  const progress = useMemo(
+    () => getBetGameProgress(bet, teamRawMatches),
+    [bet, teamRawMatches]
+  );
+  const isBetLiveNow = useMemo(
+    () => isBetLive(bet, teamRawMatches),
+    [bet, teamRawMatches]
+  );
+  const createdAtLabel = useMemo(() => formatBetCreatedAt(bet), [bet]);
+  const normalizedBetDate = useMemo(() => normalizeBetDate(bet.date), [bet.date]);
+
+  return (
+    <div
+      id={`bet-row-${bet.id}`}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onEditBet(bet);
+      }}
+      onClick={() => onToggleMatches(bet.id)}
+      className={`bg-[#131316] hover:bg-[#16161b] border p-3 sm:p-3.5 rounded-xl transition-colors flex flex-col gap-2.5 group relative cursor-pointer select-none ${
+        isNewlyAdded
+          ? 'border-[#ccff00]/70 ring-1 ring-[#ccff00]/40 shadow-lg shadow-[#ccff00]/5'
+          : 'border-[#24242c] hover:border-zinc-700'
+      }`}
+      title="Clique para expandir/recolher os times, ou clique duplo para editar"
+    >
+      {/* Top Bar: Action & Meta badges (Left) | Status, Toggle & Financial Stats (Right) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-[#1f1f28]/70">
+        {/* Action & Meta badges */}
+        <div className="flex items-center justify-between sm:justify-start w-full sm:w-auto gap-2 shrink-0">
+          <div className="flex items-center gap-2">
+            {/* 3 dots menu button */}
+            <div className="relative shrink-0">
+              <button
+                id={`btn-menu-${bet.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleMenu(bet.id);
+                }}
+                className="p-1 text-zinc-500 hover:text-white rounded-md hover:bg-zinc-800 transition-colors cursor-pointer"
+                title="Opções da aposta"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              {/* Action Dropdown Menu */}
+              {isMenuOpen && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute left-0 top-full mt-1 w-36 bg-[#1a1a20] border border-[#30303c] rounded-xl shadow-2xl py-1.5 z-40 animate-in fade-in zoom-in-95 duration-100"
+                >
+                  <button
+                    onClick={() => {
+                      onCloseMenu();
+                      onEditBet(bet);
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-zinc-200 hover:bg-zinc-800 flex items-center gap-2 cursor-pointer font-medium"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                    <span>Editar Aposta</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      onCloseMenu();
+                      onDeleteBet(bet.id);
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-rose-400 hover:bg-rose-950/40 flex items-center gap-2 cursor-pointer font-medium"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>Excluir Aposta</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Casa de Apostas Badge */}
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider shrink-0 ${
+                bet.bookmaker === 'Betano'
+                  ? 'bg-[#f97316] text-white shadow-xs'
+                  : 'bg-[#15803d] text-white shadow-xs'
+              }`}
+            >
+              {bet.bookmaker}
+            </span>
+
+            {/* Formato Badge */}
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider shrink-0 border ${
+                bet.format === 'Múltipla'
+                  ? 'bg-blue-950/50 text-blue-300 border-blue-800/60'
+                  : 'bg-purple-950/50 text-purple-300 border-purple-800/60'
+              }`}
+            >
+              {bet.format}
+            </span>
+
+            {isNewlyAdded && (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-[#ccff00]/15 text-[#ccff00] border border-[#ccff00]/40 shrink-0">
+                Novo
+              </span>
+            )}
+
+            {createdAtLabel && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#181820] border border-[#282834] text-[10px] font-semibold text-zinc-400 shrink-0"
+                title={`Bilhete montado em ${createdAtLabel} (horário de criação do bilhete)`}
+              >
+                <Clock className="w-3 h-3 text-zinc-500 shrink-0" />
+                <span>Montado {createdAtLabel}</span>
+              </span>
+            )}
+          </div>
+
+          {/* Mobile Expand Indicator Icon */}
+          <div className="sm:hidden p-1 text-zinc-500">
+            {isMatchesExpanded ? (
+              <ChevronUp className="w-4 h-4" />
+            ) : (
+              <ChevronDown className="w-4 h-4" />
+            )}
+          </div>
+        </div>
+
+        {/* Right Section: Status Pill + Saldo + Toggle Button + Chevron */}
+        <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-2.5 w-full sm:w-auto flex-wrap sm:flex-nowrap shrink-0">
+          {/* Saldo / Lucro Badge */}
+          <span
+            className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[10.5px] font-black tracking-tight font-sans border shrink-0 ${
+              bet.profit > 0
+                ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30'
+                : bet.profit < 0
+                ? 'bg-rose-950/40 text-rose-450 border-rose-500/30'
+                : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+            }`}
+          >
+            {bet.profit > 0 && '+'}
+            {bet.profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} R$
+          </span>
+
+          {/* Static Status Badge */}
+          <span
+            className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-wider border shrink-0 shadow-xs ${
+              bet.status === 'Ganha'
+                ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/50'
+                : bet.status === 'Perdida'
+                ? 'bg-rose-950/60 text-rose-300 border-rose-500/50'
+                : bet.status === 'Pendente'
+                ? 'bg-amber-950/60 text-amber-300 border-amber-500/50'
+                : bet.status === 'Reembolsada'
+                ? 'bg-zinc-800 text-zinc-300 border-zinc-600'
+                : 'bg-zinc-900 text-zinc-400 border-zinc-800'
+            }`}
+          >
+            {bet.status}
+          </span>
+
+          {/* Toggle Details Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleStats(bet.id);
+            }}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#17171c] hover:bg-[#202028] border border-[#262630] hover:border-zinc-700 text-zinc-400 hover:text-white text-[10px] sm:text-[11px] font-black tracking-tight transition-colors cursor-pointer select-none active:scale-95 shrink-0"
+            title={isStatsExpanded ? 'Ocultar detalhes financeiros' : 'Ver cotação, valor, ganho e lucro'}
+          >
+            {isStatsExpanded ? (
+              <>
+                <EyeOff className="w-3.5 h-3.5 text-rose-400" />
+                <span className="hidden sm:inline font-bold">Ocultar</span>
+                <ChevronRight className="w-4 h-4 text-zinc-500" />
+              </>
+            ) : (
+              <>
+                <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="font-sans font-bold">Odds</span>
+                <ChevronLeft className="w-4 h-4 text-zinc-500" />
+              </>
+            )}
+          </button>
+
+          {/* Game Counter & Live Game Indicator per Bet Slip */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span
+              id={`bet-counter-${bet.id}`}
+              className="text-xs sm:text-[13px] font-medium text-zinc-400 font-sans tracking-tight shrink-0 select-none px-0.5"
+              title={`Jogos finalizados no bilhete: ${progress.completed} de ${progress.total}`}
+            >
+              {progress.completed}/{progress.total}
+            </span>
+
+            {isBetLiveNow && (
+              <span
+                id={`bet-live-badge-${bet.id}`}
+                data-testid={`bet-live-badge-${bet.id}`}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8.5px] sm:text-[9.5px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 select-none animate-pulse shrink-0 font-sans shadow-xs"
+                title="Existe jogo ao vivo em andamento neste bilhete (LIVE / AO VIVO)"
+                aria-label="LIVE AO VIVO"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                <span className="sr-only">LIVE </span>
+                <span>AO VIVO</span>
+              </span>
+            )}
+          </div>
+
+          {/* Desktop Expand Matches Chevron */}
+          <div className="hidden sm:block p-1 text-zinc-500">
+            {isMatchesExpanded ? (
+              <ChevronUp className="w-4 h-4 text-zinc-400" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-zinc-400" />
+            )}
+          </div>
+
+          {/* Sliding Stats Grid */}
+          {isStatsExpanded && (
+            <div className="flex items-center ml-1">
+              <div className="flex items-center gap-3.5 sm:gap-4.5 bg-[#17171c] border border-[#262630] px-3.5 py-1.5 rounded-xl text-right shrink-0">
+                <div>
+                  <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                    ODD
+                  </span>
+                  <div className="flex items-center gap-1.5 justify-end">
+                    <span className="text-xs font-black text-white font-sans">
+                      {bet.odd.toFixed(2)}
+                    </span>
+                    <span className="text-[11px] font-medium text-zinc-400 font-sans select-none">
+                      {progress.completed}/{progress.total}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                    STAKE
+                  </span>
+                  <span className="text-xs font-black text-white font-sans">
+                    {bet.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    <span className="text-[9px] text-zinc-400 font-bold ml-0.5">R$</span>
+                  </span>
+                </div>
+
+                <div>
+                  <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                    RETORNO
+                  </span>
+                  <span
+                    className={`text-xs font-black font-sans ${
+                      bet.status === 'Ganha' ? 'text-emerald-400' : 'text-zinc-400'
+                    }`}
+                  >
+                    {bet.status === 'Ganha'
+                      ? bet.potentialReturn.toLocaleString('pt-BR', { minimumFractionDigits: 2 })
+                      : '0,00'}
+                    <span className="text-[9px] font-bold ml-0.5 text-zinc-500">R$</span>
+                  </span>
+                </div>
+
+                <div>
+                  <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
+                    LUCRO
+                  </span>
+                  <span
+                    className={`text-xs font-black font-sans ${
+                      bet.status === 'Ganha'
+                        ? 'text-emerald-400'
+                        : bet.status === 'Perdida'
+                        ? 'text-rose-500'
+                        : 'text-zinc-400'
+                    }`}
+                  >
+                    {bet.status === 'Ganha' && '+'}
+                    {bet.profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    <span className="text-[9px] font-bold ml-0.5 text-zinc-500">R$</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Confrontos do Bilhete - COLLAPSIBLE & RENDERED ON DEMAND */}
+      {isMatchesExpanded && (
+        <div className="w-full pt-1 sm:pt-2">
+          {bet.legs && bet.legs.length > 0 ? (
+            <div className="flex flex-col gap-2 w-full">
+              {bet.legs.map((leg, lIdx) => {
+                const official = resolveOfficialMatchResult(leg, dateMatches || [], teamRawMatches);
+                const resolvedStatus =
+                  official.source !== 'none' ? official.status : (leg.matchStatus || official.status);
+                const isPlayableScore =
+                  resolvedStatus === 'finished' ||
+                  resolvedStatus === 'live' ||
+                  resolvedStatus === 'halftime' ||
+                  ((leg.status === 'green' || leg.status === 'red') && Boolean(leg.score?.ft || leg.settledScore));
+
+                const scoreStr = isPlayableScore
+                  ? official.scoreText ||
+                    (leg.score?.ft
+                      ? `${leg.score.ft[0]} - ${leg.score.ft[1]}`
+                      : leg.settledScore
+                      ? `${leg.settledScore[0]} - ${leg.settledScore[1]}`
+                      : null)
+                  : null;
+
+                const legStatus =
+                  leg.status && leg.status !== 'pending'
+                    ? leg.status
+                    : official.isVoided || official.isCancelled
+                    ? 'void'
+                    : official.isFinished
+                    ? evaluateLegResult(leg.market, official.homeScore, official.awayScore, official.status)
+                    : leg.status || 'pending';
+                const marketText = leg.marketLabel || (leg.market ? getMarketLabel(leg.market) : null);
+                const isLegLiveNow = isLegLive(leg, teamRawMatches) || official.isLive;
+                const legNormDate = normalizeBetDate(leg.date);
+                const rawLegTime = leg.time || '16:00';
+                const displayLegTime =
+                  legNormDate && normalizedBetDate && legNormDate !== normalizedBetDate
+                    ? `${legNormDate.slice(8, 10)}/${legNormDate.slice(5, 7)} • ${rawLegTime}`
+                    : rawLegTime;
+
+                return (
+                  <MatchupPill
+                    key={`${bet.id}_leg_${leg.id || lIdx}_${lIdx}`}
+                    team1={leg.team1 || ''}
+                    team2={leg.team2 || ''}
+                    team1Id={leg.team1Id}
+                    team2Id={leg.team2Id}
+                    score={scoreStr}
+                    status={legStatus}
+                    market={marketText}
+                    time={displayLegTime}
+                    isLive={isLegLiveNow}
+                    className="w-full"
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            (() => {
+              const parsed = parseMatchupFromTitle(bet.title);
+              if (parsed) {
+                return (
+                  <MatchupPill
+                    team1={parsed.team1}
+                    team2={parsed.team2}
+                    className="w-full"
+                  />
+                );
+              }
+              return (
+                <div className="px-3 py-2 rounded-lg bg-[#16161f] border border-[#262635] text-xs font-semibold text-white">
+                  {bet.title}
+                </div>
+              );
+            })()
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
 
 export interface BalancoViewProps {
   supabaseFavorites?: { id: number; name: string; country?: string; league?: string }[];
@@ -87,6 +548,7 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
     isSyncing,
     handleSyncAllMatchResults,
     handleSaveBet,
+    handleSaveMultipleBets,
     handleDeleteBet,
     handleSaveBankroll,
     setNotification,
@@ -103,15 +565,73 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
 
   // Modal States
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
+  const [addModalInitialMode, setAddModalInitialMode] = useState<'manual' | 'auto'>('manual');
   const [editingBet, setEditingBet] = useState<BetItem | null>(null);
   const [isBankrollModalOpen, setIsBankrollModalOpen] = useState<boolean>(false);
   const [tempBankroll, setTempBankroll] = useState<string>('26,00');
   const [isAutoBetModalOpen, setIsAutoBetModalOpen] = useState<boolean>(false);
   const [autoBetConfig, setAutoBetConfig] = useState<AutoBetConfig | null>(null);
+  const [newlyAddedIds, setNewlyAddedIds] = useState<Record<string, boolean>>({});
+  const highlightTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const highlightAndRevealBets = useCallback((savedBets: BetItem[]) => {
+    if (!savedBets || savedBets.length === 0) return;
+
+    // Ensure target months are expanded and reset restrictive filters so newly built tickets are visible immediately
+    setCollapsedMonths((prev) => {
+      const next = { ...prev };
+      for (const b of savedBets) {
+        const normDate = normalizeBetDate(b?.date);
+        if (normDate && normDate.length >= 7) {
+          next[normDate.slice(0, 7)] = false;
+        }
+      }
+      return next;
+    });
+    setSelectedStatusFilter('Todas');
+    setSearchQuery('');
+
+    const nextHighlight: Record<string, boolean> = {};
+    for (const b of savedBets) {
+      if (b?.id) nextHighlight[b.id] = true;
+    }
+    setNewlyAddedIds(nextHighlight);
+
+    if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = setTimeout(() => {
+      setNewlyAddedIds({});
+    }, 12000);
+
+    const firstId = savedBets[0]?.id;
+    if (firstId) {
+      setTimeout(() => {
+        const el = document.getElementById(`bet-row-${firstId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 120);
+    }
+  }, []);
+
+  const handleSaveBetWithHighlight = useCallback(
+    async (bet: BetItem) => {
+      await handleSaveBet(bet);
+      highlightAndRevealBets([bet]);
+    },
+    [handleSaveBet, highlightAndRevealBets]
+  );
+
+  const handleSaveMultipleBetsWithHighlight = useCallback(
+    async (newBets: BetItem[], customMessage?: string) => {
+      await handleSaveMultipleBets(newBets, customMessage);
+      highlightAndRevealBets(newBets);
+    },
+    [handleSaveMultipleBets, highlightAndRevealBets]
+  );
 
   const loadAutoBetConfig = async () => {
     try {
-      const res = await fetch('/api/auto-bet/config');
+      const res = await fetch('/api/auto-bet/config?preview=0');
       const data = await res.json();
       if (data && data.success && data.config) {
         setAutoBetConfig(data.config);
@@ -123,6 +643,9 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
 
   useEffect(() => {
     loadAutoBetConfig();
+    return () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    };
   }, []);
 
   // Close row popup menu when clicking outside
@@ -143,8 +666,9 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
       if (!b || !b.id || seenIds.has(b.id)) return false;
       seenIds.add(b.id);
 
+      const normDate = normalizeBetDate(b.date);
       const titleNorm = (b.title || '').toLowerCase().trim();
-      const compositeKey = `${b.date || ''}_${titleNorm}`;
+      const compositeKey = `${normDate}_${titleNorm}`;
       if (compositeKey && seenKeys.has(compositeKey)) return false;
       if (compositeKey) seenKeys.add(compositeKey);
 
@@ -165,11 +689,14 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
     });
   }, [bets, searchQuery, selectedStatusFilter]);
 
-  // Group bets by Month -> then by Day
+  // Group bets by Month -> then by Day (calendar descending; newest created tickets on top within each day)
   const groupedData: MonthGroup[] = useMemo(() => {
-    // Sort bets descending by date
     const sorted = [...filteredBets].sort((a, b) => {
-      return new Date(b.date).getTime() - new Date(a.date).getTime();
+      const dateA = normalizeBetDate(a.date);
+      const dateB = normalizeBetDate(b.date);
+      const dateDiff = dateB.localeCompare(dateA);
+      if (dateDiff !== 0) return dateDiff;
+      return getBetCreatedAtMs(b) - getBetCreatedAtMs(a);
     });
 
     const monthsMap: Record<string, MonthGroup> = {};
@@ -199,19 +726,15 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
       'SÁBADO',
     ];
 
-    // Helper for ISO week number
-    function getWeekNumber(d: Date): number {
-      const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-      const dayNum = date.getUTCDay() || 7;
-      date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-      const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-      return Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
-    }
-
     for (const b of sorted) {
-      const d = new Date(b.date + 'T12:00:00');
-      const year = d.getFullYear();
-      const monthIdx = d.getMonth();
+      const normDate = normalizeBetDate(b.date);
+      const parts = normDate.split('-').map((n) => parseInt(n, 10));
+      const hasValidParts = parts.length === 3 && parts.every((n) => !isNaN(n));
+      const year = hasValidParts ? parts[0] : new Date().getFullYear();
+      const monthIdx = hasValidParts ? Math.max(0, Math.min(11, parts[1] - 1)) : new Date().getMonth();
+      const dayNum = hasValidParts ? parts[2] : new Date().getDate();
+      const utcDate = new Date(Date.UTC(year, monthIdx, dayNum, 12, 0, 0));
+
       const monthKey = `${year}-${String(monthIdx + 1).padStart(2, '0')}`;
       const monthLabel = `${monthNames[monthIdx]} ${year}`;
 
@@ -224,45 +747,64 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
         };
       }
 
-      // Profit of this bet (Single Source of Truth)
       const betProfit = calculateBetProfit(b.status, b.amount, b.odd);
-
       monthsMap[monthKey].monthProfit += betProfit;
 
-      const dayNum = d.getDate();
-      const weekDayName = weekDays[d.getDay()];
-      const weekNumber = getWeekNumber(d);
-      const dayKey = b.date;
-      const dayLabel = `SEMANA ${weekNumber} • ${weekDayName} ${String(dayNum).padStart(2, '0')}`;
+      const weekDayName = weekDays[utcDate.getUTCDay()];
+      const dayKey = `${monthKey}-${String(dayNum).padStart(2, '0')}`;
+      const dayLabel = `${weekDayName}, DIA ${String(dayNum).padStart(2, '0')} DE ${monthNames[monthIdx]}`;
 
       if (!monthsMap[monthKey].days[dayKey]) {
         monthsMap[monthKey].days[dayKey] = {
           dayKey,
           dayLabel,
           dayProfit: 0,
+          latestCreatedAtMs: 0,
           items: [],
         };
+      }
+
+      const createdMs = getBetCreatedAtMs(b);
+      if (createdMs > monthsMap[monthKey].days[dayKey].latestCreatedAtMs) {
+        monthsMap[monthKey].days[dayKey].latestCreatedAtMs = createdMs;
       }
 
       monthsMap[monthKey].days[dayKey].dayProfit += betProfit;
       monthsMap[monthKey].days[dayKey].items.push(b);
     }
 
-    return Object.values(monthsMap);
+    return Object.values(monthsMap).sort((a, b) => b.monthKey.localeCompare(a.monthKey));
   }, [filteredBets]);
 
-  // Handlers
-  const handleDeleteBetClick = async (betId: string) => {
-    setActiveMenuBetId(null);
-    await handleDeleteBet(betId);
-  };
+  // Stable callbacks for memoized BetCardRow (0 lag when toggling arrows/menus)
+  const handleToggleMatches = useCallback((betId: string) => {
+    setExpandedMatches((prev) => ({
+      ...prev,
+      [betId]: !prev[betId],
+    }));
+  }, []);
 
-  const handleToggleMonth = (monthKey: string) => {
+  const handleToggleStats = useCallback((betId: string) => {
+    setExpandedBets((prev) => ({
+      ...prev,
+      [betId]: !prev[betId],
+    }));
+  }, []);
+
+  const handleToggleMenu = useCallback((betId: string) => {
+    setActiveMenuBetId((prev) => (prev === betId ? null : betId));
+  }, []);
+
+  const handleCloseMenu = useCallback(() => {
+    setActiveMenuBetId(null);
+  }, []);
+
+  const handleToggleMonth = useCallback((monthKey: string) => {
     setCollapsedMonths((prev) => ({
       ...prev,
       [monthKey]: !prev[monthKey],
     }));
-  };
+  }, []);
 
   const handleSaveBankrollClick = async () => {
     const val = parseFloat(tempBankroll.replace(',', '.'));
@@ -345,13 +887,17 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
           {/* Automação Diária de Bilhetes */}
           <button
             id="btn-open-autobet-modal"
-            onClick={() => setIsAutoBetModalOpen(true)}
+            onClick={() => {
+              setEditingBet(null);
+              setAddModalInitialMode('auto');
+              setIsAddModalOpen(true);
+            }}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-xs font-bold transition-all cursor-pointer shadow-xs ${
               autoBetConfig?.enabled
                 ? 'bg-emerald-950/50 hover:bg-emerald-950/80 border-emerald-500/50 text-emerald-300'
                 : 'bg-[#18181c] hover:bg-[#22222a] border-[#2a2a32] hover:border-zinc-600 text-zinc-300 hover:text-white'
             }`}
-            title="Configurar montagem automática diária de bilhetes"
+            title="Configurar montagem automática diária de bilhetes dentro de Adicionar Aposta"
           >
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
@@ -361,7 +907,7 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
             <Bot className="w-3.5 h-3.5" />
             <span>
               {autoBetConfig?.enabled
-                ? `Auto: ${autoBetConfig.mode === 'home' ? 'Casa' : 'Fora'}`
+                ? `Auto: ${autoBetConfig.mode === 'home' ? 'Casa' : autoBetConfig.mode === 'away' ? 'Fora' : 'Todos'}`
                 : 'Automação'}
             </span>
           </button>
@@ -371,6 +917,7 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
             id="btn-open-add-bet-modal"
             onClick={() => {
               setEditingBet(null);
+              setAddModalInitialMode('manual');
               setIsAddModalOpen(true);
             }}
             className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-black shadow-lg shadow-indigo-600/30 transition-all cursor-pointer uppercase tracking-wider font-sans"
@@ -395,20 +942,26 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
                   <Home className="w-3.5 h-3.5 text-[#ccff00]" />
                   <span>Favoritos jogando em casa</span>
                 </>
-              ) : (
+              ) : autoBetConfig.mode === 'away' ? (
                 <>
                   <Plane className="w-3.5 h-3.5 text-[#ccff00]" />
                   <span>Favoritos jogando fora de casa</span>
                 </>
+              ) : (
+                <span>Favoritos (Casa e Fora)</span>
               )}
             </span>
             <span className="text-zinc-600 hidden sm:inline">•</span>
             <span className="text-[11px] text-zinc-400">
-              Até 3 jogos/bilhete • Execução diária automática em segundo plano
+              Até {autoBetConfig.maxGamesPerTicket || 3} jogos/bilhete • Método Foguinho • Execução diária automática
             </span>
           </div>
           <button
-            onClick={() => setIsAutoBetModalOpen(true)}
+            onClick={() => {
+              setEditingBet(null);
+              setAddModalInitialMode('auto');
+              setIsAddModalOpen(true);
+            }}
             className="text-[11px] font-bold text-[#ccff00] hover:underline cursor-pointer self-start sm:self-center shrink-0"
           >
             Configurar
@@ -626,6 +1179,7 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
           <button
             onClick={() => {
               setEditingBet(null);
+              setAddModalInitialMode('manual');
               setIsAddModalOpen(true);
             }}
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black shadow-lg shadow-indigo-600/30 transition-all cursor-pointer uppercase tracking-wider"
@@ -638,7 +1192,9 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
         <div className="space-y-6">
           {groupedData.map((month) => {
             const isCollapsed = !!collapsedMonths[month.monthKey];
-            const daysList: DayGroup[] = Object.values(month.days);
+            const daysList: DayGroup[] = Object.values(month.days).sort((a, b) =>
+              b.dayKey.localeCompare(a.dayKey)
+            );
 
             return (
               <div key={month.monthKey} className="space-y-3">
@@ -646,7 +1202,7 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
                 <div
                   id={`month-header-${month.monthKey}`}
                   onClick={() => handleToggleMonth(month.monthKey)}
-                  className="bg-[#121215] hover:bg-[#16161a] border border-[#232329] px-4 py-3 rounded-xl flex items-center justify-between cursor-pointer select-none transition-all group"
+                  className="bg-[#121215] hover:bg-[#16161a] border border-[#232329] px-4 py-3 rounded-xl flex items-center justify-between cursor-pointer select-none transition-colors group"
                 >
                   <div className="flex items-center gap-2.5">
                     <span className="text-xs text-zinc-400 group-hover:text-white transition-colors">
@@ -707,387 +1263,24 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
 
                         {/* Bet Items in this Day */}
                         <div className="space-y-2">
-                          {day.items.map((bet, bIdx) => {
-                            const isMenuOpen = activeMenuBetId === bet.id;
-                            const isStatsExpanded = !!expandedBets[bet.id];
-                            const progress = getBetGameProgress(bet, teamRawMatches);
-                            const isBetLiveNow = isBetLive(bet, teamRawMatches);
-
-                            return (
-                              <div
-                                key={`${bet.id}_${bIdx}`}
-                                id={`bet-row-${bet.id}`}
-                                onDoubleClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingBet(bet);
-                                }}
-                                onClick={() => {
-                                  setExpandedMatches((prev) => ({
-                                    ...prev,
-                                    [bet.id]: !prev[bet.id],
-                                  }));
-                                }}
-                                className="bg-[#131316] hover:bg-[#16161b] border border-[#24242c] hover:border-zinc-700 p-3 sm:p-3.5 rounded-xl transition-all flex flex-col gap-2.5 group relative cursor-pointer select-none"
-                                title="Clique para expandir/recolher os times, ou clique duplo para editar"
-                              >
-                                {/* Top Bar: Action & Meta badges (Left) | Status, Toggle & Financial Stats (Right) */}
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-[#1f1f28]/70">
-                                  {/* Action & Meta badges */}
-                                  <div className="flex items-center justify-between sm:justify-start w-full sm:w-auto gap-2 shrink-0">
-                                    <div className="flex items-center gap-2">
-                                      {/* 3 dots menu button */}
-                                      <div className="relative shrink-0">
-                                        <button
-                                          id={`btn-menu-${bet.id}`}
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setActiveMenuBetId(isMenuOpen ? null : bet.id);
-                                          }}
-                                          className="p-1 text-zinc-500 hover:text-white rounded-md hover:bg-zinc-800 transition-colors cursor-pointer"
-                                          title="Opções da aposta"
-                                        >
-                                          <MoreVertical className="w-4 h-4" />
-                                        </button>
-
-                                        {/* Action Dropdown Menu */}
-                                        {isMenuOpen && (
-                                          <div
-                                            onClick={(e) => e.stopPropagation()}
-                                            className="absolute left-0 top-full mt-1 w-36 bg-[#1a1a20] border border-[#30303c] rounded-xl shadow-2xl py-1.5 z-40 animate-in fade-in zoom-in-95 duration-100"
-                                          >
-                                            <button
-                                              onClick={() => {
-                                                setActiveMenuBetId(null);
-                                                setEditingBet(bet);
-                                              }}
-                                              className="w-full px-3 py-2 text-left text-xs text-zinc-200 hover:bg-zinc-800 flex items-center gap-2 cursor-pointer font-medium"
-                                            >
-                                              <Edit2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                                              <span>Editar Aposta</span>
-                                            </button>
-                                            <button
-                                              onClick={() => handleDeleteBet(bet.id)}
-                                              className="w-full px-3 py-2 text-left text-xs text-rose-400 hover:bg-rose-950/40 flex items-center gap-2 cursor-pointer font-medium"
-                                            >
-                                              <Trash2 className="w-3.5 h-3.5 shrink-0" />
-                                              <span>Excluir Aposta</span>
-                                            </button>
-                                          </div>
-                                        )}
-                                      </div>
-
-                                      {/* Casa de Apostas Badge */}
-                                      <span
-                                        className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider shrink-0 ${
-                                          bet.bookmaker === 'Betano'
-                                            ? 'bg-[#f97316] text-white shadow-xs'
-                                            : 'bg-[#15803d] text-white shadow-xs'
-                                        }`}
-                                      >
-                                        {bet.bookmaker}
-                                      </span>
-
-                                      {/* Formato Badge */}
-                                      <span
-                                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider shrink-0 border ${
-                                          bet.format === 'Múltipla'
-                                            ? 'bg-blue-950/50 text-blue-300 border-blue-800/60'
-                                            : 'bg-purple-950/50 text-purple-300 border-purple-800/60'
-                                        }`}
-                                      >
-                                        {bet.format}
-                                      </span>
-                                    </div>
-
-                                    {/* Mobile Expand Indicator Icon (Only visible on mobile at the end of the line) */}
-                                    <div className="sm:hidden p-1 text-zinc-500">
-                                      {expandedMatches[bet.id] ? (
-                                        <ChevronUp className="w-4 h-4" />
-                                      ) : (
-                                        <ChevronDown className="w-4 h-4" />
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Right Section: Status Pill + Saldo + Toggle Button + Chevron */}
-                                  <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-2.5 w-full sm:w-auto flex-wrap sm:flex-nowrap shrink-0">
-                                    {/* Saldo / Lucro Badge - ALWAYS visible so when card is collapsed the balance is crystal clear */}
-                                    <span
-                                      className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-[10.5px] font-black tracking-tight font-sans border shrink-0 ${
-                                        bet.profit > 0
-                                          ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30'
-                                          : bet.profit < 0
-                                          ? 'bg-rose-950/40 text-rose-450 border-rose-500/30'
-                                          : 'bg-zinc-900 text-zinc-400 border-zinc-800'
-                                      }`}
-                                    >
-                                      {bet.profit > 0 && '+'}
-                                      {bet.profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} R$
-                                    </span>
-
-                                    {/* Static Status Badge */}
-                                    <span
-                                      className={`px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full text-[9px] sm:text-[10px] font-black uppercase tracking-wider border shrink-0 shadow-xs ${
-                                        bet.status === 'Ganha'
-                                          ? 'bg-emerald-950/60 text-emerald-300 border-emerald-500/50'
-                                          : bet.status === 'Perdida'
-                                          ? 'bg-rose-950/60 text-rose-300 border-rose-500/50'
-                                          : bet.status === 'Pendente'
-                                          ? 'bg-amber-950/60 text-amber-300 border-amber-500/50'
-                                          : bet.status === 'Reembolsada'
-                                          ? 'bg-zinc-800 text-zinc-300 border-zinc-600'
-                                          : 'bg-zinc-900 text-zinc-400 border-zinc-800'
-                                      }`}
-                                    >
-                                      {bet.status}
-                                    </span>
-
-                                    {/* Toggle Details Button */}
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setExpandedBets((prev) => ({
-                                          ...prev,
-                                          [bet.id]: !prev[bet.id],
-                                        }));
-                                      }}
-                                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#17171c] hover:bg-[#202028] border border-[#262630] hover:border-zinc-700 text-zinc-400 hover:text-white text-[10px] sm:text-[11px] font-black tracking-tight transition-all cursor-pointer select-none active:scale-95 shrink-0"
-                                      title={isStatsExpanded ? 'Ocultar detalhes financeiros' : 'Ver cotação, valor, ganho e lucro'}
-                                    >
-                                      {isStatsExpanded ? (
-                                        <>
-                                          <EyeOff className="w-3.5 h-3.5 text-rose-400" />
-                                          <span className="hidden sm:inline font-bold">Ocultar</span>
-                                          <ChevronRight className="w-4 h-4 text-zinc-500" />
-                                        </>
-                                      ) : (
-                                        <>
-                                          <Eye className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-                                          <span className="font-sans font-bold">Odds</span>
-                                          <ChevronLeft className="w-4 h-4 text-zinc-500" />
-                                        </>
-                                      )}
-                                    </button>
-
-                                    {/* Game Counter & Live Game Indicator per Bet Slip */}
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      <span
-                                        id={`bet-counter-${bet.id}`}
-                                        className="text-xs sm:text-[13px] font-medium text-zinc-400 font-sans tracking-tight shrink-0 select-none px-0.5"
-                                        title={`Jogos finalizados no bilhete: ${progress.completed} de ${progress.total}`}
-                                      >
-                                        {progress.completed}/{progress.total}
-                                      </span>
-
-                                      {/* Live Game Indicator - subtle compact box displayed only when at least one game is live */}
-                                      {isBetLiveNow && (
-                                        <span
-                                          id={`bet-live-badge-${bet.id}`}
-                                          data-testid={`bet-live-badge-${bet.id}`}
-                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[8.5px] sm:text-[9.5px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 select-none animate-pulse shrink-0 font-sans shadow-xs"
-                                          title="Existe jogo ao vivo em andamento neste bilhete (LIVE / AO VIVO)"
-                                          aria-label="LIVE AO VIVO"
-                                        >
-                                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-                                          <span className="sr-only">LIVE </span>
-                                          <span>AO VIVO</span>
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    {/* Desktop Expand Matches Chevron (Hidden on mobile) */}
-                                    <div className="hidden sm:block p-1 text-zinc-500">
-                                      {expandedMatches[bet.id] ? (
-                                        <ChevronUp className="w-4 h-4 text-zinc-400" />
-                                      ) : (
-                                        <ChevronDown className="w-4 h-4 text-zinc-400" />
-                                      )}
-                                    </div>
-
-                                    {/* Sliding Stats Grid */}
-                                    <div
-                                      className={`transition-all duration-300 ease-out overflow-hidden flex items-center ${
-                                        isStatsExpanded
-                                          ? 'max-w-[420px] opacity-100 ml-1'
-                                          : 'max-w-0 opacity-0 pointer-events-none'
-                                      }`}
-                                    >
-                                      <div className="flex items-center gap-3.5 sm:gap-4.5 bg-[#17171c] border border-[#262630] px-3.5 py-1.5 rounded-xl text-right shrink-0">
-                                        {/* COTAÇÃO */}
-                                        <div>
-                                          <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
-                                            ODD
-                                          </span>
-                                          <div className="flex items-center gap-1.5 justify-end">
-                                            <span className="text-xs font-black text-white font-sans">
-                                              {bet.odd.toFixed(2)}
-                                            </span>
-                                            <span className="text-[11px] font-medium text-zinc-400 font-sans select-none">
-                                              {progress.completed}/{progress.total}
-                                            </span>
-                                            {isBetLiveNow && (
-                                              <span
-                                                className="inline-flex items-center gap-1 px-1 py-0.2 rounded text-[8px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 select-none animate-pulse shrink-0 font-sans"
-                                                title="Existe jogo ao vivo em andamento neste bilhete (LIVE / AO VIVO)"
-                                                aria-label="LIVE AO VIVO"
-                                              >
-                                                <span className="w-1 h-1 rounded-full bg-emerald-400 shrink-0" />
-                                                <span className="sr-only">LIVE </span>
-                                                <span>AO VIVO</span>
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-
-                                        {/* VALOR */}
-                                        <div>
-                                          <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
-                                            STAKE
-                                          </span>
-                                          <span className="text-xs font-black text-white font-sans">
-                                            {bet.amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                            <span className="text-[9px] text-zinc-400 font-bold ml-0.5">R$</span>
-                                          </span>
-                                        </div>
-
-                                        {/* GANHO */}
-                                        <div>
-                                          <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
-                                            RETORNO
-                                          </span>
-                                          <span
-                                            className={`text-xs font-black font-sans ${
-                                              bet.status === 'Ganha'
-                                                ? 'text-emerald-400'
-                                                : 'text-zinc-400'
-                                            }`}
-                                          >
-                                            {bet.status === 'Ganha'
-                                              ? bet.potentialReturn.toLocaleString('pt-BR', { minimumFractionDigits: 2 })
-                                              : '0,00'}
-                                            <span className="text-[9px] font-bold ml-0.5 text-zinc-500">R$</span>
-                                          </span>
-                                        </div>
-
-                                        {/* LUCRO */}
-                                        <div>
-                                          <span className="block text-[8px] font-bold text-zinc-500 uppercase tracking-wider">
-                                            LUCRO
-                                          </span>
-                                          <span
-                                            className={`text-xs font-black font-sans ${
-                                              bet.status === 'Ganha'
-                                                ? 'text-emerald-400'
-                                                : bet.status === 'Perdida'
-                                                ? 'text-rose-500'
-                                                : 'text-zinc-400'
-                                            }`}
-                                          >
-                                            {bet.status === 'Ganha' && '+'}
-                                            {bet.profit.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                            <span className="text-[9px] font-bold ml-0.5 text-zinc-500">R$</span>
-                                          </span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* Confrontos do Bilhete com Logos e Nomes Por Extenso - COLLAPSIBLE */}
-                                {expandedMatches[bet.id] && (
-                                  <div className="w-full pt-1 sm:pt-2 animate-in fade-in duration-200">
-                                    {bet.legs && bet.legs.length > 0 ? (
-                                      bet.legs.length === 1 ? (
-                                        // Confronto único (Aposta Simples)
-                                        (() => {
-                                          const leg = bet.legs[0];
-                                          const official = resolveOfficialMatchResult(leg, dateMatches || [], teamRawMatches);
-                                          const scoreStr = leg.score?.ft
-                                            ? `${leg.score.ft[0]}-${leg.score.ft[1]}`
-                                            : (official.scoreText || null);
-                                          const legStatus =
-                                            leg.status && leg.status !== 'pending'
-                                              ? leg.status
-                                              : (official.isFinished
-                                                  ? evaluateLegResult(leg.market, official.homeScore, official.awayScore, official.status)
-                                                  : leg.status || 'pending');
-                                          const marketText = leg.marketLabel || (leg.market ? getMarketLabel(leg.market) : null);
-                                          const isLegLiveNow = isLegLive(leg, teamRawMatches) || official.isLive;
-
-                                          return (
-                                            <MatchupPill
-                                              team1={leg.team1 || ''}
-                                              team2={leg.team2 || ''}
-                                              team1Id={leg.team1Id}
-                                              team2Id={leg.team2Id}
-                                              score={scoreStr}
-                                              status={legStatus}
-                                              market={marketText}
-                                              time={leg.time || '16:00'}
-                                              isLive={isLegLiveNow}
-                                              className="w-full"
-                                            />
-                                          );
-                                        })()
-                                      ) : (
-                                        // Múltiplos confrontos (Até 5 por bilhete - Diagramação limpa em coluna única, super legível no mobile)
-                                        <div className="flex flex-col gap-2 w-full">
-                                          {bet.legs.map((leg, lIdx) => {
-                                            const official = resolveOfficialMatchResult(leg, dateMatches || [], teamRawMatches);
-                                            const scoreStr = leg.score?.ft
-                                              ? `${leg.score.ft[0]}-${leg.score.ft[1]}`
-                                              : (official.scoreText || null);
-                                            const legStatus =
-                                              leg.status && leg.status !== 'pending'
-                                                ? leg.status
-                                                : (official.isFinished
-                                                    ? evaluateLegResult(leg.market, official.homeScore, official.awayScore, official.status)
-                                                    : leg.status || 'pending');
-                                            const marketText = leg.marketLabel || (leg.market ? getMarketLabel(leg.market) : null);
-                                            const isLegLiveNow = isLegLive(leg, teamRawMatches) || official.isLive;
-
-                                            return (
-                                              <MatchupPill
-                                                key={`${bet.id}_leg_${leg.id || lIdx}_${lIdx}`}
-                                                team1={leg.team1 || ''}
-                                                team2={leg.team2 || ''}
-                                                team1Id={leg.team1Id}
-                                                team2Id={leg.team2Id}
-                                                score={scoreStr}
-                                                status={legStatus}
-                                                market={marketText}
-                                                time={leg.time || '16:00'}
-                                                isLive={isLegLiveNow}
-                                                className="w-full"
-                                              />
-                                            );
-                                          })}
-                                        </div>
-                                      )
-                                    ) : (
-                                      (() => {
-                                        const parsed = parseMatchupFromTitle(bet.title);
-                                        if (parsed) {
-                                          return (
-                                            <MatchupPill
-                                              team1={parsed.team1}
-                                              team2={parsed.team2}
-                                              className="w-full"
-                                            />
-                                          );
-                                        }
-                                        return (
-                                          <div className="px-3 py-2 rounded-lg bg-[#16161f] border border-[#262635] text-xs font-semibold text-white">
-                                            {bet.title}
-                                          </div>
-                                        );
-                                      })()
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
+                          {day.items.map((bet) => (
+                            <BetCardRow
+                              key={bet.id}
+                              bet={bet}
+                              isMenuOpen={activeMenuBetId === bet.id}
+                              isStatsExpanded={!!expandedBets[bet.id]}
+                              isMatchesExpanded={!!expandedMatches[bet.id]}
+                              isNewlyAdded={!!newlyAddedIds[bet.id]}
+                              teamRawMatches={teamRawMatches}
+                              dateMatches={dateMatches}
+                              onToggleMatches={handleToggleMatches}
+                              onToggleStats={handleToggleStats}
+                              onToggleMenu={handleToggleMenu}
+                              onCloseMenu={handleCloseMenu}
+                              onEditBet={setEditingBet}
+                              onDeleteBet={handleDeleteBet}
+                            />
+                          ))}
                         </div>
                       </div>
                     ))}
@@ -1104,12 +1297,14 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
         <BetModal
           isOpen={true}
           initialBet={editingBet}
+          initialBuildMode={editingBet ? 'manual' : addModalInitialMode}
           existingBets={bets}
           onClose={() => {
             setIsAddModalOpen(false);
             setEditingBet(null);
           }}
-          onSave={handleSaveBet}
+          onSave={handleSaveBetWithHighlight}
+          onSaveMultiple={handleSaveMultipleBetsWithHighlight}
           onDelete={handleDeleteBet}
           supabaseFavorites={supabaseFavorites}
           teamForms={teamForms}
@@ -1118,6 +1313,13 @@ export const BalancoView: React.FC<BalancoViewProps> = React.memo(({
           dateMatches={dateMatches}
           selectedDate={selectedDate}
           autoBetConfig={autoBetConfig}
+          onAutoBetConfigUpdated={async (newConfig, message) => {
+            setAutoBetConfig(newConfig);
+            await loadAutoBetConfig();
+            if (message) {
+              setNotification({ message, type: 'success' });
+            }
+          }}
           onOpenAutoBet={() => {
             setIsAddModalOpen(false);
             setEditingBet(null);

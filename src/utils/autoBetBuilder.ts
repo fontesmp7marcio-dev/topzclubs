@@ -6,7 +6,9 @@ import {
   BetFormat,
   BetItem,
   BetLeg,
+  DEFAULT_MATCH_FILTERS,
   Match,
+  MatchItem,
 } from '../types';
 import {
   USER_FAVORITE_CLUBS_DATA,
@@ -15,6 +17,12 @@ import {
 } from '../data/favoriteClubs';
 import { isFemaleOrWomensMatch } from './femaleFilter';
 import { getTeamId } from './teamCrests';
+import {
+  calculateTeamEmojis,
+  filterTeamPastMatches,
+  generateFallbackTeamMatches,
+  getEndingFireStreak,
+} from './competitionFilter';
 import {
   calculateBetProfit,
   evaluateBetStatusFromLegs,
@@ -25,13 +33,15 @@ import {
 } from './betSync';
 
 export const DEFAULT_AUTO_BET_CONFIG: AutoBetConfig = {
-  enabled: false,
+  enabled: true,
   mode: 'home',
   bookmaker: 'Betano',
   market: 'OVER_1_5',
   stake: 20,
   defaultOdd: 2.0,
   maxGamesPerTicket: 3,
+  fireCountFilter: 0,
+  ticketCount: null,
 };
 
 export interface FavoriteClubEntry {
@@ -45,6 +55,8 @@ export interface AutoBetCandidate {
   match: Match;
   favoriteSide: 'home' | 'away';
   alreadyInBet: boolean;
+  fireStreak: number;
+  emojis: string[];
 }
 
 function normalizeDateStr(d?: string): string {
@@ -168,9 +180,68 @@ export function collectUsedMatchesForDate(
   return { usedMatchIds, usedPairs, usedTeams };
 }
 
+export function getFavoriteTeamFireInfo(
+  teamName: string,
+  teamId: number | undefined,
+  favoritesList: FavoriteClubEntry[],
+  teamRawMatches?: Record<string | number, MatchItem[]>
+): { emojis: string[]; fireStreak: number } {
+  const activeList =
+    favoritesList && favoritesList.length > 0 ? favoritesList : USER_FAVORITE_CLUBS_DATA;
+  const norm = normalizeTeamName(teamName || '');
+  const lower = (teamName || '').toLowerCase().trim();
+  const dictId = getTeamId(teamName || '');
+  const matchedFav =
+    (teamId && Number(teamId) > 0
+      ? activeList.find((f) => Number(f.id) === Number(teamId))
+      : null) ||
+    (dictId ? activeList.find((f) => Number(f.id) === Number(dictId)) : null) ||
+    activeList.find((f) => normalizeTeamName(f.name) === norm);
+
+  const effectiveId = teamId || matchedFav?.id || dictId || 0;
+  const favNorm = matchedFav?.name ? normalizeTeamName(matchedFav.name) : '';
+
+  let raw: MatchItem[] | undefined;
+  if (teamRawMatches) {
+    if (effectiveId && teamRawMatches[effectiveId]?.length) raw = teamRawMatches[effectiveId];
+    else if (effectiveId && teamRawMatches[String(effectiveId)]?.length)
+      raw = teamRawMatches[String(effectiveId)];
+    else if (norm && teamRawMatches[norm]?.length) raw = teamRawMatches[norm];
+    else if (favNorm && teamRawMatches[favNorm]?.length) raw = teamRawMatches[favNorm];
+    else if (lower && teamRawMatches[lower]?.length) raw = teamRawMatches[lower];
+    else if (dictId && teamRawMatches[dictId]?.length) raw = teamRawMatches[dictId];
+    else if (dictId && teamRawMatches[String(dictId)]?.length) raw = teamRawMatches[String(dictId)];
+  }
+
+  if (!raw || raw.length === 0) {
+    raw = generateFallbackTeamMatches(matchedFav?.name || teamName, effectiveId || 10000);
+  }
+
+  if (!raw || raw.length === 0) {
+    return { emojis: [], fireStreak: 0 };
+  }
+
+  const filtered = filterTeamPastMatches(
+    raw,
+    DEFAULT_MATCH_FILTERS,
+    matchedFav?.name || teamName,
+    effectiveId
+  );
+  const emojis = calculateTeamEmojis(filtered, DEFAULT_MATCH_FILTERS.window || 5);
+  const fireStreak = getEndingFireStreak(emojis);
+  return { emojis, fireStreak };
+}
+
+function matchesFireCountFilter(fireStreak: number, fireCountFilter = 0): boolean {
+  if (!fireCountFilter || fireCountFilter <= 0) return fireStreak >= 1;
+  if (fireCountFilter === 1) return fireStreak === 1;
+  if (fireCountFilter === 2) return fireStreak === 2;
+  return fireStreak >= 3;
+}
+
 /**
  * Identifies all valid, confirmed matches on `dateStr` where a favorite club plays
- * strictly in the selected modality ('home' or 'away').
+ * strictly in the selected modality ('all' | 'home' | 'away') AND is active in the Método Foguinho (🔥 >= 1).
  */
 export function getAutoBetCandidates(
   matches: Match[],
@@ -178,7 +249,9 @@ export function getAutoBetCandidates(
   mode: AutoBetMode,
   favoritesList: FavoriteClubEntry[],
   existingBets: BetItem[] = [],
-  blockedMatchKeys: Set<string> = new Set()
+  blockedMatchKeys: Set<string> = new Set(),
+  teamRawMatches?: Record<string | number, MatchItem[]>,
+  fireCountFilter = 0
 ): AutoBetCandidate[] {
   const targetDate = normalizeDateStr(dateStr);
   const { usedMatchIds, usedPairs, usedTeams } = collectUsedMatchesForDate(
@@ -205,14 +278,52 @@ export function getAutoBetCandidates(
     // 3. Exclude women's, youth, reserve, and friendly matches
     if (isFemaleOrWomensMatch(m.leagueName, m.team1, m.team2)) continue;
 
-    // 4. Modality check: favorite strictly at home ('home') or strictly away ('away')
+    // 4. Modality check: favorite at home ('home'), away ('away'), or either ('all')
     const isHomeFav = isTeamFavorite(m.team1, m.team1Id, favoritesList);
     const isAwayFav = isTeamFavorite(m.team2, m.team2Id, favoritesList);
 
     if (mode === 'home' && !isHomeFav) continue;
     if (mode === 'away' && !isAwayFav) continue;
+    if (mode === 'all' && !isHomeFav && !isAwayFav) continue;
 
-    // 5. Deduplicate within today's match pool
+    // 5. Método do Foguinho check (🔥 Under 1.5 streak >= 1 on the target favorite team)
+    const homeInfo = isHomeFav
+      ? getFavoriteTeamFireInfo(m.team1, m.team1Id, favoritesList, teamRawMatches)
+      : { emojis: [], fireStreak: 0 };
+    const awayInfo = isAwayFav
+      ? getFavoriteTeamFireInfo(m.team2, m.team2Id, favoritesList, teamRawMatches)
+      : { emojis: [], fireStreak: 0 };
+
+    let chosenSide: 'home' | 'away' = 'home';
+    let fireStreak = 0;
+    let emojis: string[] = [];
+
+    if (mode === 'home') {
+      chosenSide = 'home';
+      fireStreak = homeInfo.fireStreak;
+      emojis = homeInfo.emojis;
+      if (!matchesFireCountFilter(fireStreak, fireCountFilter)) continue;
+    } else if (mode === 'away') {
+      chosenSide = 'away';
+      fireStreak = awayInfo.fireStreak;
+      emojis = awayInfo.emojis;
+      if (!matchesFireCountFilter(fireStreak, fireCountFilter)) continue;
+    } else {
+      const homeQual = isHomeFav && matchesFireCountFilter(homeInfo.fireStreak, fireCountFilter);
+      const awayQual = isAwayFav && matchesFireCountFilter(awayInfo.fireStreak, fireCountFilter);
+      if (!homeQual && !awayQual) continue;
+      if (homeQual && (!awayQual || homeInfo.fireStreak >= awayInfo.fireStreak)) {
+        chosenSide = 'home';
+        fireStreak = homeInfo.fireStreak;
+        emojis = homeInfo.emojis;
+      } else {
+        chosenSide = 'away';
+        fireStreak = awayInfo.fireStreak;
+        emojis = awayInfo.emojis;
+      }
+    }
+
+    // 6. Deduplicate within today's match pool
     const mId = m.id ? String(m.id) : '';
     const n1 = normalizeTeamName(m.team1);
     const n2 = normalizeTeamName(m.team2);
@@ -237,13 +348,16 @@ export function getAutoBetCandidates(
 
     candidates.push({
       match: { ...m, date: targetDate },
-      favoriteSide: mode,
+      favoriteSide: chosenSide,
       alreadyInBet: isUsedInExisting,
+      fireStreak,
+      emojis,
     });
   }
 
-  // Sort chronologically by kickoff time, then team1 name for deterministic grouping
+  // Sort by highest Foguinho streak first, then chronologically by kickoff time
   candidates.sort((a, b) => {
+    if (b.fireStreak !== a.fireStreak) return b.fireStreak - a.fireStreak;
     const tDiff = parseTimeToMinutes(a.match.time) - parseTimeToMinutes(b.match.time);
     if (tDiff !== 0) return tDiff;
     return a.match.team1.localeCompare(b.match.team1);
@@ -253,17 +367,22 @@ export function getAutoBetCandidates(
 }
 
 /**
- * Groups eligible matches into tickets of max 3 games, prioritizing 3-game multiples,
- * with a remainder ticket of 2 games or 1 individual game if not divisible by 3.
+ * Groups eligible matches into tickets of max `maxPerTicket` (1..3) games,
+ * optionally capped to `maxTickets` tickets.
  */
-export function chunkMatchesIntoTickets(
-  matches: Match[],
-  maxPerTicket = 3
-): Match[][] {
+export function chunkMatchesIntoTickets<T = Match>(
+  matches: T[],
+  maxPerTicket = 3,
+  maxTickets?: number | null
+): T[][] {
   const safeMax = Math.max(1, Math.min(3, Math.floor(maxPerTicket) || 3));
-  const chunks: Match[][] = [];
-  for (let i = 0; i < matches.length; i += safeMax) {
-    chunks.push(matches.slice(i, i + safeMax));
+  const pool =
+    typeof maxTickets === 'number' && maxTickets > 0
+      ? matches.slice(0, maxTickets * safeMax)
+      : matches;
+  const chunks: T[][] = [];
+  for (let i = 0; i < pool.length; i += safeMax) {
+    chunks.push(pool.slice(i, i + safeMax));
   }
   return chunks;
 }
@@ -273,13 +392,16 @@ export function chunkMatchesIntoTickets(
  */
 export function resolveAutoBetMarket(
   marketOption: AutoBetMarketOption,
-  mode: AutoBetMode
+  mode: AutoBetMode,
+  favoriteSide?: 'home' | 'away'
 ): string {
+  const effectiveSide: 'home' | 'away' =
+    favoriteSide || (mode === 'away' ? 'away' : 'home');
   if (marketOption === 'FAV_WIN') {
-    return mode === 'home' ? 'HOME_WIN' : 'AWAY_WIN';
+    return effectiveSide === 'home' ? 'HOME_WIN' : 'AWAY_WIN';
   }
   if (marketOption === 'FAV_DC') {
-    return mode === 'home' ? 'DC_1X' : 'DC_X2';
+    return effectiveSide === 'home' ? 'DC_1X' : 'DC_X2';
   }
   return marketOption || 'OVER_1_5';
 }
@@ -291,17 +413,21 @@ export function resolveAutoBetMarket(
 export function buildAutoBetItemsFromChunks(
   chunks: Match[][],
   dateStr: string,
-  config: AutoBetConfig
+  config: AutoBetConfig,
+  favoriteSidesByMatchId?: Record<string, 'home' | 'away'>
 ): BetItem[] {
   const targetDate = normalizeDateStr(dateStr);
-  const concreteMarket = resolveAutoBetMarket(config.market, config.mode);
   const stake = Number(config.stake) > 0 ? Number(config.stake) : 20;
   const odd = Number(config.defaultOdd) >= 1.01 ? Number(config.defaultOdd) : 2.0;
   const bookmaker = config.bookmaker === 'Bet365' ? 'Bet365' : 'Betano';
-  const createdAt = new Date().toISOString();
+  const baseCreatedAtMs = Date.now();
 
-  return chunks.map((chunk) => {
+  return chunks.map((chunk, chunkIdx) => {
+    const createdAt = new Date(baseCreatedAtMs + (chunks.length - 1 - chunkIdx) * 10).toISOString();
     const legs: BetLeg[] = chunk.map((m) => {
+      const mIdStr = m.id ? String(m.id) : '';
+      const favSide = mIdStr ? favoriteSidesByMatchId?.[mIdStr] : undefined;
+      const concreteMarket = resolveAutoBetMarket(config.market, config.mode, favSide);
       const scores = extractScoreFromMatch(m);
       const matchStatus = extractStatusFromMatch(m);
       const meta = getMarketMetadata(concreteMarket, m.team1, m.team2);
@@ -312,7 +438,9 @@ export function buildAutoBetItemsFromChunks(
         matchStatus
       );
       const hasScore =
-        typeof scores.homeScore === 'number' && typeof scores.awayScore === 'number';
+        (matchStatus === 'finished' || matchStatus === 'live') &&
+        typeof scores.homeScore === 'number' &&
+        typeof scores.awayScore === 'number';
       const isFinished = matchStatus === 'finished';
 
       const legId = m.id
@@ -353,7 +481,7 @@ export function buildAutoBetItemsFromChunks(
       .map((l) => l.matchId || l.matchTitle)
       .sort()
       .join('|');
-    const id = `auto-${targetDate}-${config.mode}-${deterministicHash(sortedKeys)}`;
+    const id = `auto-${targetDate}-${config.mode}-${deterministicHash(sortedKeys + '_' + chunkIdx)}`;
 
     return {
       id,
@@ -381,21 +509,26 @@ export function buildAutoBetPreview(
   dateStr: string,
   config: AutoBetConfig,
   favoritesList: FavoriteClubEntry[],
-  existingBets: BetItem[]
+  existingBets: BetItem[],
+  teamRawMatches?: Record<string | number, MatchItem[]>
 ): AutoBetPreview {
   const candidates = getAutoBetCandidates(
     matches,
     dateStr,
     config.mode,
     favoritesList,
-    existingBets
+    existingBets,
+    new Set(),
+    teamRawMatches,
+    config.fireCountFilter || 0
   );
 
   const available = candidates.filter((c) => !c.alreadyInBet);
   const alreadyUsedCount = candidates.filter((c) => c.alreadyInBet).length;
   const chunks = chunkMatchesIntoTickets(
     available.map((c) => c.match),
-    config.maxGamesPerTicket || 3
+    config.maxGamesPerTicket || 3,
+    config.ticketCount
   );
 
   return {
@@ -412,6 +545,8 @@ export function buildAutoBetPreview(
       leagueName: c.match.leagueName,
       favoriteSide: c.favoriteSide,
       alreadyInBet: c.alreadyInBet,
+      fireStreak: c.fireStreak,
+      emojis: c.emojis,
     })),
   };
 }

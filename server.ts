@@ -172,8 +172,18 @@ app.post('/api/user-bankroll', async (req, res) => {
 app.get('/api/auto-bet/config', async (req, res) => {
   try {
     const config = await getAutoBetConfig();
+    if (req.query.preview === '0') {
+      return res.json({ success: true, config });
+    }
     const dateStr = (req.query.date as string) || getBrasiliaTodayStr();
-    const modeOverride = req.query.mode === 'away' ? 'away' : req.query.mode === 'home' ? 'home' : undefined;
+    const modeOverride =
+      req.query.mode === 'away'
+        ? 'away'
+        : req.query.mode === 'home'
+        ? 'home'
+        : req.query.mode === 'all'
+        ? 'all'
+        : undefined;
     const preview = await getAutoBetPreview(
       dateStr,
       modeOverride ? { ...config, mode: modeOverride } : undefined
@@ -187,10 +197,12 @@ app.get('/api/auto-bet/config', async (req, res) => {
 app.post('/api/auto-bet/config', async (req, res) => {
   try {
     const body = req.body || {};
-    const config = await updateAutoBetConfig(body);
+    const skipRun = Boolean(body.skipRun);
+    const { skipRun: _ignored, date: bodyDate, ...configPayload } = body;
+    const config = await updateAutoBetConfig(configPayload);
     let runResult: any = null;
-    if (config.enabled) {
-      const targetDate = typeof body.date === 'string' && body.date ? body.date : getBrasiliaTodayStr();
+    if (config.enabled && !skipRun) {
+      const targetDate = typeof bodyDate === 'string' && bodyDate ? bodyDate : getBrasiliaTodayStr();
       runResult = await runDailyAutoBetting({ dateStr: targetDate, manualTrigger: false });
       const syncRes = await syncPendingBetsInBackground();
       if (syncRes.settledBets.length > 0) {
@@ -200,7 +212,9 @@ app.post('/api/auto-bet/config', async (req, res) => {
       }
     }
     const updatedConfig = await getAutoBetConfig();
-    const preview = runResult?.preview || (await getAutoBetPreview(getBrasiliaTodayStr()));
+    const preview = skipRun
+      ? undefined
+      : runResult?.preview || (await getAutoBetPreview(getBrasiliaTodayStr()));
     res.json({
       success: true,
       config: updatedConfig,
@@ -233,6 +247,42 @@ app.post('/api/auto-bet/run-now', async (req, res) => {
       updatedBetsCount: syncRes.updatedCount,
       skippedReason: runResult.skippedReason,
       preview: runResult.preview,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Verify & Sync All Pending / Incomplete Bets directly against FotMob
+app.post('/api/balanco/sync-results', async (req, res) => {
+  try {
+    const forceRefresh = Boolean(req.body?.force || req.query.force === 'true');
+    const syncRes = await syncPendingBetsInBackground({ forceRefresh });
+    if (syncRes.settledBets.length > 0) {
+      for (const settled of syncRes.settledBets) {
+        handleBetResultNotification(settled).catch(() => {});
+      }
+    }
+    res.json({
+      success: true,
+      updatedCount: syncRes.updatedCount,
+      settledBets: syncRes.settledBets,
+      bets: syncRes.bets,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/balanco/sync-results', async (req, res) => {
+  try {
+    const forceRefresh = req.query.force === 'true';
+    const syncRes = await syncPendingBetsInBackground({ forceRefresh });
+    res.json({
+      success: true,
+      updatedCount: syncRes.updatedCount,
+      settledBets: syncRes.settledBets,
+      bets: syncRes.bets,
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
